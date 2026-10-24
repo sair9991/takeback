@@ -42,7 +42,7 @@ def compute_loss(model, X, maia_logits, mask, target_idx, seconds, lam=0.2):
     rows = torch.arange(len(X))
     mean = time_out[rows, target_idx, 0]
     log_std = time_out[rows, target_idx, 1]
-    y = torch.log(seconds)
+    y = torch.log(seconds.clamp(min=0.1))
     time_loss = (log_std + (y - mean) ** 2 / (2 * torch.exp(2 * log_std))).mean()
 
     return move_loss + lam * time_loss, move_loss, time_loss
@@ -58,9 +58,41 @@ def move_accuracy(model, X, maia_logits, mask, target_idx):
 # ---- training loop ----
 if __name__ == "__main__":
     from pathlib import Path
+    import sys
 
-    train = make_data(13000)
-    val = make_data(3000)
+    # Check for real pre-computed Maia-3 snapshots
+    dataset_file = Path(__file__).resolve().parent.parent / "snapshots_dataset.pt"
+    if dataset_file.exists():
+        print(f"Loading real Maia-3 snapshots from {dataset_file.name}...")
+        tensors = torch.load(dataset_file, map_location="cpu", weights_only=False)
+        # Split 80/20 by unique game_ids to prevent data leakage
+        game_ids = tensors["game_ids"]
+        unique_games = list(dict.fromkeys(game_ids))
+        n_train_games = int(len(unique_games) * 0.8)
+        train_set = set(unique_games[:n_train_games])
+
+        train_idx = torch.tensor([i for i, gid in enumerate(game_ids) if gid in train_set], dtype=torch.long)
+        val_idx = torch.tensor([i for i, gid in enumerate(game_ids) if gid not in train_set], dtype=torch.long)
+
+        train = (
+            tensors["X"][train_idx],
+            tensors["maia_logits"][train_idx],
+            tensors["mask"][train_idx],
+            tensors["target_idx"][train_idx],
+            tensors["seconds"][train_idx],
+        )
+        val = (
+            tensors["X"][val_idx],
+            tensors["maia_logits"][val_idx],
+            tensors["mask"][val_idx],
+            tensors["target_idx"][val_idx],
+            tensors["seconds"][val_idx],
+        )
+        print(f"Loaded real dataset: {len(train[0])} train snapshots, {len(val[0])} val snapshots.")
+    else:
+        print("Precomputed snapshots_dataset.pt not found. Using synthetic dummy data...")
+        train = make_data(13000)
+        val = make_data(3000)
 
     model = Clone()
     opt = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
