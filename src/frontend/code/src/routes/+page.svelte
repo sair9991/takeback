@@ -1,2 +1,9 @@
-<h1>Welcome to SvelteKit</h1>
-<p>Visit <a href="https://svelte.dev/docs/kit">svelte.dev/docs/kit</a> to read the documentation</p>
+
+<div class="home_container">
+  <div class="home_left_side">
+    test
+  </div>
+  <div class="home_right_side">
+    test
+  </div>
+</div>
