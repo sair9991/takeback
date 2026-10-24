@@ -17,6 +17,7 @@ maia3/
 models/
 *.pt
 Model/*.pt
+MAIA3
 
 # Large generated datasets
 snapshots_dataset.pt
