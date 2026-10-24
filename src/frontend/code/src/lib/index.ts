@@ -1,1 +1,3 @@
-// place files you want to import through the `#lib` alias in this folder.
+export * from './functions/games';
+export { default as GameCard } from './components/GameCard.svelte';
+export { default as NewAnalysisModal } from './components/NewAnalysisModal.svelte';

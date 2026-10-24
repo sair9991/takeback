@@ -153,6 +153,9 @@ html, body {
   border-radius: 20px;
   text-decoration: none;
   color: var(--text-color);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .navigation_bar > .nav_active {
@@ -160,8 +163,9 @@ html, body {
 }
 
 .logout_button {
-  display: block;
-  background: white;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   outline: none;
   border: none;
   background: #ff5050;
@@ -170,6 +174,16 @@ html, body {
   padding: 0.75em;
   padding-top: 0.3em;
   padding-bottom: 0.3em;
+  margin-left: 0.5em;
+  cursor: pointer;
+}
+
+.nav_text {
+  display: inline;
+}
+
+.nav_icon {
+  display: none;
 }
 
 .spacer {
@@ -179,7 +193,76 @@ html, body {
 
 .app_content {
   padding: 1em;
+}
+
+.nav_divider {
+  width: 3px;
+  height: 37px;
   background: black;
-  color: white;
+  border-radius: 40px;
+  margin-left: 0.5em;
+}
+
+@media screen and (max-width: 768px) {
+
+  .nav_text {
+    display: none;
+  }
+
+  .nav_icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .navigation_bar {
+    font-size: 16px;
+    right: 0.75em;
+    top: 0.75em;
+    padding: 0.25em;
+    gap: 0.25em;
+    align-items: center;
+  }
+
+  .navigation_bar > a {
+    width: 38px;
+    height: 38px;
+    padding: 0;
+    aspect-ratio: 1 / 1;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    flex-shrink: 0;
+  }
+
+  .logout_button {
+    width: 38px;
+    height: 38px;
+    padding: 0;
+    aspect-ratio: 1 / 1;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-left: 0.25em;
+    box-sizing: border-box;
+    flex-shrink: 0;
+  }
+
+  .nav_divider {
+    height: 24px;
+    margin-left: 0.2em;
+    margin-right: 0.2em;
+  }
+
+  .home_left_side {
+    width: 100%;
+  }
+
+  .home_right_side {
+    display: none;
+  }
 }
 
