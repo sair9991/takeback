@@ -1,6 +1,23 @@
 
-<script>
+<script lang="ts">
+  import { goto } from '$app/navigation';
   import Icon from '@iconify/svelte';
+
+  let email = $state('');
+  let password = $state('');
+  let showPassword = $state(false);
+
+  function handleSubmit(event: SubmitEvent) {
+    event.preventDefault();
+    if (!showPassword) {
+      if (email.trim().length > 0) {
+        showPassword = true;
+      }
+    } else {
+      console.log('Logging in with:', { email, password });
+      goto("/app");
+    }
+  }
 </script>
 
 <div class="home_container">
@@ -17,7 +34,7 @@
           .
         </span>
       </p>
-      <button class="google_login">
+      <button class="google_login" type="button">
         <Icon icon="logos:google-icon" width="15" height="15" />
         &nbsp;
         Continue with Google
@@ -25,10 +42,27 @@
       <p id="login_divider">
         ------------- or -------------
       </p>
-      <input type="text" id="username" placeholder="Enter email" />
-      <button class="email_login_button">
-        Continue
-      </button>
+      <form onsubmit={handleSubmit}>
+        <input
+          type="email"
+          id="username"
+          placeholder="Enter email"
+          bind:value={email}
+          required
+        />
+        {#if showPassword}
+          <input
+            type="password"
+            id="password"
+            placeholder="Enter password"
+            bind:value={password}
+            required
+          />
+        {/if}
+        <button type="submit" class="email_login_button">
+          {showPassword ? 'Log In' : 'Continue'}
+        </button>
+      </form>
     </div>
   </div>
   <div class="home_right_side">
