@@ -118,3 +118,46 @@ html, body {
   margin: auto;
 }
 
+/* Navigation Bar */
+
+.navigation_bar {
+  padding: 0.3em;
+  background: var(--bg-color);
+  border: 1px solid var(--text-color);
+  width: fit-content;
+  display: flex;
+  gap: 0.1em;
+  border-radius: 40px;
+  font-size: 20px;
+  position: absolute;
+  right: 1em;
+  top: 1em;
+}
+
+.navigation_bar > a {
+  padding: 0.75em;
+  padding-top: 0.3em;
+  padding-bottom: 0.3em;
+  background: var(--bg-color);
+  border-radius: 20px;
+  text-decoration: none;
+  color: var(--text-color);
+}
+
+.navigation_bar > .nav_active {
+  background: var(--accent-1);
+}
+
+.logout_button {
+  display: block;
+  background: white;
+  outline: none;
+  border: none;
+  background: #ff5050;
+  border-radius: 40px;
+  font-size: 20px;
+  padding: 0.75em;
+  padding-top: 0.3em;
+  padding-bottom: 0.3em;
+}
+
