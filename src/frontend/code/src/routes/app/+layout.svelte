@@ -13,6 +13,10 @@
   }
 </script>
 
+<div class="logo">
+  <img src="/small_logo.svg" alt="Company Logo" class="small_logo" height="50em" />
+</div>
+
 <nav class="navigation_bar">
   <a class={page.url.pathname === "/app" ? 'nav_active' : ''} href="/app">Home</a>
   <a class={page.url.pathname.startsWith('/app/analyze') ? 'nav_active' : ''} href="/app/analyze">Analyze</a>
@@ -22,4 +26,9 @@
   </button>
 </nav>
 
-{@render children()}
+<div class="spacer"></div>
+
+<div class="app_content">
+  {@render children()}
+</div>
+
