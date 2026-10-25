@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getInitials, type Game } from '../functions/games';
+  import { getInitials, type Game } from '../functions/analyzedGames';
 
   let { game, onclick }: { game: Game; onclick?: () => void } = $props();
 
