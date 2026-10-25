@@ -1,0 +1,92 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: chess_postgres
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-chess_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chess_password}
+      POSTGRES_DB: ${POSTGRES_DB:-chess_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # schema runs once on first startup
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-chess_user} -d ${POSTGRES_DB:-chess_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  gemma:
+    image: ghcr.io/ggml-org/llama.cpp:server
+    container_name: chess_gemma
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      # caches downloaded weights on host
+      - ./models:/models
+    command: >
+      --hf-repo bartowski/gemma-2-2b-it-GGUF
+      --hf-file gemma-2-2b-it-Q4_K_M.gguf
+      --host 0.0.0.0
+      --port 8080
+      -c 2048
+      --threads 4
+      --embeddings
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: chess_backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      gemma:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://chess_user:chess_password@db:5432/chess_db}
+      GEMMA_API_URL: ${GEMMA_API_URL:-http://gemma:8080}
+      GEMMA_TIMEOUT: ${GEMMA_TIMEOUT:-60.0}
+      STOCKFISH_PATH: ${STOCKFISH_PATH:-/usr/games/stockfish}
+      DEFAULT_DEVICE: ${DEFAULT_DEVICE:-cpu}
+      JWT_SECRET: ${JWT_SECRET:-chess-clone-dev-secret-key-32chars-min!!}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:8000/api/auth/google/callback}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+    ports:
+      - "8000:8000"
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir app
+    volumes:
+      - ./backend:/app
+      - ./models:/app/models
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: chess_frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - VITE_API_BASE=http://localhost:8000
+      - CHOKIDAR_USEPOLLING=true
+      - WATCHPACK_POLLING=true
+
+volumes:
+  postgres_data:
