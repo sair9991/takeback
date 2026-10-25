@@ -66,6 +66,28 @@ export async function logout(): Promise<void> {
 }
 
 /**
+ * Update the user profile (e.g., connect Chess.com username).
+ */
+export async function updateProfile(payload: {
+  chess_com_username?: string;
+  lichess_username?: string;
+}): Promise<User> {
+  const res = await fetch(`${API_BASE}/api/auth/profile`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.detail || 'Failed to update profile');
+  }
+
+  return await res.json();
+}
+
+/**
  * Check active session and return current user profile.
  */
 export async function getMe(): Promise<User | null> {

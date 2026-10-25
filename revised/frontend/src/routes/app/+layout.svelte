@@ -1,11 +1,19 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
-  import { logout } from '../../lib/functions/auth';
+  import { logout, getMe } from '../../lib/functions/auth';
   import '../../app.css';
 	import type { LayoutProps } from './$types';
 
 	let { children }: LayoutProps = $props();
+
+  onMount(async () => {
+    const user = await getMe();
+    if (user && !user.chess_com_username) {
+      goto('/?connect=true');
+    }
+  });
 
   async function handleLogout() {
     await logout();

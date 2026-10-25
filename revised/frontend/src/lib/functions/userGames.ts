@@ -1,41 +1,45 @@
 import type { Game } from '../types/game';
+import { getMe } from './auth';
 export type { Game };
 
 const API_BASE = 'http://localhost:8000';
 
-export const FALLBACK_GAMES: Game[] = [
-  { id: 'stuffyness_2025.04.20_0', opponent: 'Zzlatko', date: '2025.04.20', platform: 'Chess.com', initials: 'ZZ', player_color: 'black', player_elo: 1813, opponent_elo: 1850, time_control: '600' },
-  { id: 'stuffyness_2025.04.20_1', opponent: 'Lolitoarg', date: '2025.04.20', platform: 'Chess.com', initials: 'LO', player_color: 'white', player_elo: 1821, opponent_elo: 1818, time_control: '600' },
-  { id: 'stuffyness_2025.04.20_2', opponent: 'Parvaz55', date: '2025.04.20', platform: 'Chess.com', initials: 'PA', player_color: 'black', player_elo: 1813, opponent_elo: 1844, time_control: '600' },
-  { id: 'stuffyness_2025.04.21_3', opponent: 'logan40', date: '2025.04.21', platform: 'Chess.com', initials: 'LO', player_color: 'white', player_elo: 1821, opponent_elo: 1816, time_control: '600' },
-  { id: 'stuffyness_2025.04.21_4', opponent: 'neb84', date: '2025.04.21', platform: 'Chess.com', initials: 'NE', player_color: 'black', player_elo: 1814, opponent_elo: 1825, time_control: '600' },
-];
-
 /**
- * Returns synchronous fallback games list.
+ * Returns initial empty games list (no dummy data).
  */
 export function getUserGames(): Game[] {
-  return FALLBACK_GAMES;
+  return [];
 }
 
 /**
- * Fetches all chess games played by the user across connected platforms from backend.
+ * Fetches real chess games played by the user from the backend.
+ * Never falls back to mock or dummy data.
  */
-export async function fetchUserGames(username: string = 'stuffyness'): Promise<Game[]> {
+export async function fetchUserGames(username?: string, forceSync: boolean = false): Promise<Game[]> {
   try {
-    const res = await fetch(`${API_BASE}/api/users/${username}/games?limit=30`, {
+    let handle = username?.trim();
+    if (!handle) {
+      const me = await getMe();
+      handle = me?.chess_com_username || me?.user_id;
+    }
+    if (!handle) {
+      return [];
+    }
+
+    const url = `${API_BASE}/api/users/${encodeURIComponent(handle)}/games?limit=30${forceSync ? '&sync=true' : ''}`;
+    const res = await fetch(url, {
       credentials: 'include',
     });
     if (res.ok) {
       const data = await res.json();
-      if (Array.isArray(data) && data.length > 0) {
+      if (Array.isArray(data)) {
         return data;
       }
     }
   } catch (err) {
-    console.warn('Backend not reachable, using fallback games:', err);
+    console.warn('Backend not reachable for user games:', err);
   }
-  return FALLBACK_GAMES;
+  return [];
 }
 
 export interface AnalyzeResponse {

@@ -73,7 +73,8 @@ CREATE TABLE IF NOT EXISTS models (
 );
 
 CREATE INDEX IF NOT EXISTS idx_models_trained_by ON models(trained_by_user_id);
-CREATE INDEX IF NOT EXISTS idx_models_embedding ON models USING hnsw (embedding vector_cosine_ops);
+-- Note: standard pgvector HNSW indexes have a 2000-dimension limit.
+-- For 2048-dim Gemma vectors, PostgreSQL executes exact cosine distance scans (<=>) directly with full precision.
 
 -- model_access_logs table (3nf event ledger)
 CREATE TABLE IF NOT EXISTS model_access_logs (
@@ -101,7 +102,6 @@ CREATE TABLE IF NOT EXISTS analyzed_games (
 
 CREATE INDEX IF NOT EXISTS idx_analyzed_user_id ON analyzed_games(user_id);
 CREATE INDEX IF NOT EXISTS idx_analyzed_game_user ON analyzed_games(game_id, user_id);
-CREATE INDEX IF NOT EXISTS idx_analyzed_embedding ON analyzed_games USING hnsw (embedding vector_cosine_ops);
 
 -- analysis_evaluations table (3nf normalized per-ply evaluations)
 CREATE TABLE IF NOT EXISTS analysis_evaluations (

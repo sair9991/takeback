@@ -52,7 +52,7 @@ def fetch_month_games(archive_url: str) -> list[dict]:
     return data.get("games", [])
 
 
-def parse_game_chunk(chunk: str, username: str) -> Optional[dict[str, Any]]:
+def parse_game_chunk(chunk: str, username: str, require_600: bool = False) -> Optional[dict[str, Any]]:
     tags = dict(TAG_RE.findall(chunk))
     parts = re.split(r"\n\s*\n", chunk.strip(), maxsplit=1)
     movetext = parts[1].strip() if len(parts) > 1 else ""
@@ -61,7 +61,7 @@ def parse_game_chunk(chunk: str, username: str) -> Optional[dict[str, Any]]:
         return None
 
     time_control = str(tags.get("TimeControl", "")).strip()
-    if time_control != "600":
+    if require_600 and time_control != "600":
         return None
 
     white = tags.get("White", "").strip().lower()
