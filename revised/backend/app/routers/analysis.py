@@ -1,16 +1,20 @@
 from typing import List, Optional
-from fastapi import APIRouter, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, Query
 from app.db.repositories import game_repo, analysis_repo
 from app.schemas.game import GameSummary
-from app.schemas.analysis import AnalyzeResponse, SearchGameResponse
-from app.services import evaluation_service, commentary_service
+from app.schemas.analysis import (
+    AnalyzeResponse,
+    SearchGameResponse,
+    SemanticSearchGameResponse,
+)
+from app.services import evaluation_service, commentary_service, embedding_service
 from app.workers import queue_manager
 
 router = APIRouter(tags=["Analysis"])
 
 
 @router.get("/api/users/{username}/games", response_model=List[GameSummary])
-def get_user_games_legacy(username: str, limit: int = 50, offset: int = 0):
+def get_user_games(username: str, limit: int = 50, offset: int = 0):
     return game_repo.get_user_games(username, limit, offset)
 
 
@@ -46,4 +50,24 @@ def analyze_game(
 
 @router.get("/api/users/{username}/search-games", response_model=List[SearchGameResponse])
 def search_games(username: str, q: str):
+    """Keyword search across game narratives, opponent, result, and tags."""
     return analysis_repo.search_analyzed_games(username, q)
+
+
+@router.get("/api/users/{username}/search-semantic", response_model=List[SemanticSearchGameResponse])
+def search_semantic(
+    username: str,
+    q: str,
+    limit: int = Query(default=20, ge=1, le=100),
+):
+    """Natural language semantic vector search powered by local Gemma embeddings."""
+    embedding = embedding_service.get_text_embedding(q)
+    if not embedding:
+        # fallback to keyword search if embedding generation is temporarily unavailable
+        keyword_results = analysis_repo.search_analyzed_games(username, q)
+        return [
+            SemanticSearchGameResponse(**r, similarity_score=0.5)
+            for r in keyword_results[:limit]
+        ]
+
+    return analysis_repo.search_semantic_games(username, embedding, limit=limit)

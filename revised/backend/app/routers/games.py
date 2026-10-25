@@ -1,7 +1,8 @@
 from typing import List, Optional
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Query, Response
 from app.db.repositories import game_repo, analysis_repo
 from app.schemas.game import GameSummary, GameDetailResponse, MoveRecord
+from app.schemas.analysis import SemanticSearchGameResponse
 from app.services import thumbnail_service, evaluation_service, commentary_service
 
 router = APIRouter(prefix="/api/games", tags=["Games"])
@@ -75,3 +76,12 @@ def get_game_thumbnail(game_id: str, ply: Optional[int] = None):
         media_type="image/svg+xml",
         headers={"Cache-Control": "public, max-age=604800"},
     )
+
+
+@router.get("/{game_id}/similar", response_model=List[SemanticSearchGameResponse])
+def get_similar_games(
+    game_id: str,
+    limit: int = Query(default=10, ge=1, le=50),
+):
+    """Find other analyzed games with similar tactical motifs and narrative themes."""
+    return analysis_repo.find_similar_games(game_id, limit=limit)

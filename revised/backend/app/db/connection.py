@@ -38,6 +38,15 @@ def get_connection() -> Generator[psycopg.Connection, None, None]:
         yield conn
 
 
+@contextmanager
+def transaction() -> Generator[psycopg.Connection, None, None]:
+    """Yield a connection within an active ACID transaction block."""
+    pool = get_pool()
+    with pool.connection() as conn:
+        with conn.transaction():
+            yield conn
+
+
 def query(sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
     """Execute select query and return list of dict rows."""
     with get_connection() as conn:
@@ -54,9 +63,8 @@ def query_one(sql: str, params: tuple[Any, ...] = ()) -> Optional[dict[str, Any]
 
 
 def execute(sql: str, params: tuple[Any, ...] = ()) -> int:
-    """Execute insert, update, or delete query and commit transaction."""
-    with get_connection() as conn:
+    """Execute single insert, update, or delete query within an auto-committed transaction."""
+    with transaction() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, params)
-            conn.commit()
             return cur.rowcount

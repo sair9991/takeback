@@ -2,6 +2,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from app.config import settings
 from app.routers import auth, games, analysis, clones, stream
 from app.db.connection import close_pool
 from app.workers import queue_manager
@@ -23,10 +24,18 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS configuration
+# CORS configuration - explicit origins required when allow_credentials=True
+origins = [
+    settings.FRONTEND_URL,
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:5173",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[o for o in set(origins) if o],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

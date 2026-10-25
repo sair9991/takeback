@@ -1,10 +1,14 @@
-from typing import Any, Optional
+from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from app.db.repositories import model_repo
 from app.dependencies import get_optional_current_user
-from app.schemas.auth import UserResponse
-from app.schemas.clone import PredictStateRequest, PredictStateResponse
-from app.services import inference_service
+from app.schemas.clone import (
+    CloneSearchResult,
+    CloneStyleResponse,
+    PredictStateRequest,
+    PredictStateResponse,
+)
+from app.services import inference_service, commentary_service
 
 router = APIRouter(tags=["Clones"])
 
@@ -12,10 +16,10 @@ router = APIRouter(tags=["Clones"])
 @router.post("/api/predict-next-state", response_model=PredictStateResponse)
 def predict_next_state(
     payload: PredictStateRequest,
-    current_user: Optional[UserResponse] = Depends(get_optional_current_user),
+    current_user: Optional[dict] = Depends(get_optional_current_user),
 ) -> PredictStateResponse:
     """Predict the opponent clone's next move and record model access audit."""
-    user_id = (current_user.user_id if current_user else None) or payload.user_id
+    user_id = (current_user.get("user_id") if current_user else None) or payload.user_id
     try:
         return inference_service.predict_clone_move(
             fen=payload.fen,
@@ -27,14 +31,29 @@ def predict_next_state(
             my_elo=payload.my_elo,
             accessed_by_user_id=user_id,
         )
-    except Exception as e:
+    except (RuntimeError, FileNotFoundError) as e:
+        raise HTTPException(status_code=503, detail=f"Model unavailable: {str(e)}")
+    except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Inference error: {str(e)}")
 
 
 @router.get("/api/clones")
 def list_clones() -> list[dict[str, Any]]:
     """List all trained opponent models sorted by total access count."""
     return model_repo.list_models()
+
+
+@router.get("/api/clones/search", response_model=List[CloneSearchResult])
+def search_clones(
+    q: str = Query(..., description="Natural language playing style query (e.g. 'aggressive attacker', 'fast blitzer')"),
+    limit: int = Query(default=20, ge=1, le=100),
+) -> List[CloneSearchResult]:
+    """Search trained clones by playing style description using Gemma embeddings and text matching."""
+    from app.services import embedding_service
+    embedding = embedding_service.get_text_embedding(q)
+    return model_repo.search_clones_by_style(q, query_embedding=embedding, limit=limit)
 
 
 @router.get("/api/clones/{player_id}/stats")
@@ -44,6 +63,15 @@ def get_clone_stats(player_id: str) -> dict[str, Any]:
     if not stats:
         raise HTTPException(status_code=404, detail=f"Model for '{player_id}' not found")
     return stats
+
+
+@router.get("/api/clones/{player_id}/style", response_model=CloneStyleResponse)
+def get_clone_style(
+    player_id: str,
+    refresh: bool = Query(default=False, description="Force re-generation of playing style via Gemma"),
+) -> CloneStyleResponse:
+    """Retrieve a Gemma-powered natural language description of the clone's playing style and traits."""
+    return commentary_service.describe_clone_style(player_id, refresh=refresh)
 
 
 @router.get("/api/clones/{player_id}/logs")

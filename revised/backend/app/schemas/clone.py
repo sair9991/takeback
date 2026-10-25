@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import List, Optional
 from pydantic import BaseModel, Field
 
 
@@ -23,3 +23,21 @@ class PredictStateResponse(BaseModel):
     my_clock: float
     is_check: bool
     is_game_over: bool
+
+
+class CloneStyleResponse(BaseModel):
+    player_id: str
+    style_description: str
+    traits: List[str] = []
+    avg_think_time: Optional[float] = None
+    total_moves_logged: Optional[int] = None
+    cached: bool = False
+
+
+class CloneSearchResult(BaseModel):
+    player_id: str
+    model_name: str = "clone"
+    style_description: Optional[str] = None
+    val_accuracy: Optional[float] = None
+    access_count: int = 0
+    similarity_score: float = Field(default=0.0, description="Semantic match relevance score (0.0 to 1.0)")

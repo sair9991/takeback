@@ -112,106 +112,102 @@ def predict_clone_move(
         )
 
     target_color = chess.WHITE if opponent_color.lower().startswith("w") else chess.BLACK
-    weights_path = model_repo.get_model_weights_path(opponent_username or "")
+    if board.turn != target_color:
+        turn_str = "white" if board.turn == chess.WHITE else "black"
+        raise ValueError(f"It is currently {turn_str}'s turn, not {opponent_color}'s turn.")
+
+    if not Clone:
+        raise RuntimeError("Maia-3 and Clone neural network dependencies are not loaded.")
+
+    if not opponent_username:
+        raise ValueError("opponent_username is required to perform model inference.")
+
+    weights_path = model_repo.get_model_weights_path(opponent_username)
+    if not weights_path or not weights_path.is_file():
+        raise RuntimeError(f"Clone model for '{opponent_username}' is not ready or weights not found.")
+
     maia_ckpt = ensure_maia_checkpoint()
+    if not maia_ckpt.is_file():
+        raise RuntimeError("Base Maia-3 foundation model checkpoint is unavailable.")
 
-    chosen_move = None
-    think_time = None
+    # Strict neural net forward pass (no heuristic fallbacks)
+    device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
+    with _INFERENCE_LOCK:
+        engine, clone = _load_models(weights_path, maia_ckpt, device)
+        engine.board = board.copy()
+        tokens = engine._tokens_from_history(
+            deque([tokenize_board(board)], maxlen=engine.cfg.history)
+        ).unsqueeze(0).to(engine.cfg.device)
 
-    # 1. Neural Net Inference via Maia-3 + Clone MLP
-    if Clone and weights_path and weights_path.is_file() and board.turn == target_color:
-        try:
-            device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
-            with _INFERENCE_LOCK:
-                engine, clone = _load_models(weights_path, maia_ckpt, device)
-                engine.board = board.copy()
-                tokens = engine._tokens_from_history(
-                    deque([tokenize_board(board)], maxlen=engine.cfg.history)
-                ).unsqueeze(0).to(engine.cfg.device)
+        clone_elo = int(opponent_elo or 1800)
+        user_elo = int(my_elo or 1800)
+        elos = torch.tensor([clone_elo], dtype=torch.long, device=engine.cfg.device)
+        opp_elos = torch.tensor([user_elo], dtype=torch.long, device=engine.cfg.device)
 
-                clone_elo = int(opponent_elo or 1800)
-                user_elo = int(my_elo or 1800)
-                elos = torch.tensor([clone_elo], dtype=torch.long, device=engine.cfg.device)
-                opp_elos = torch.tensor([user_elo], dtype=torch.long, device=engine.cfg.device)
+        with torch.no_grad():
+            logits_move, _, _ = engine.model(tokens, elos, opp_elos)
+        logits_full = logits_move[0].float().cpu()
 
-                with torch.no_grad():
-                    logits_move, _, _ = engine.model(tokens, elos, opp_elos)
-                logits_full = logits_move[0].float().cpu()
+        mask = get_legal_moves_mask(board, engine.all_moves_dict)
+        moves, vals = [], []
+        for idx in mask.nonzero(as_tuple=False).flatten().tolist():
+            mv = engine._move_from_index(idx)
+            if mv is not None:
+                moves.append(mv)
+                vals.append(logits_full[idx])
 
-                mask = get_legal_moves_mask(board, engine.all_moves_dict)
-                moves, vals = [], []
-                for idx in mask.nonzero(as_tuple=False).flatten().tolist():
-                    mv = engine._move_from_index(idx)
-                    if mv is not None:
-                        moves.append(mv)
-                        vals.append(logits_full[idx])
+        if not moves:
+            raise RuntimeError(f"Maia-3 could not generate legal move tokens for position: {fen}")
 
-                if moves:
-                    sorted_pairs = sorted(zip(moves, vals), key=lambda pair: pair[1].item(), reverse=True)[:S]
-                    moves = [p[0] for p in sorted_pairs]
-                    vals = torch.stack([p[1] for p in sorted_pairs])
-                    n = len(moves)
+        sorted_pairs = sorted(zip(moves, vals), key=lambda pair: pair[1].item(), reverse=True)[:S]
+        moves = [p[0] for p in sorted_pairs]
+        vals = torch.stack([p[1] for p in sorted_pairs])
+        n = len(moves)
 
-                    maia_probs = torch.softmax(vals, dim=0)
-                    ply = board.fullmove_number * 2 - (2 if board.turn == chess.WHITE else 1)
-                    context_feats = compute_context_features(
-                        board=board,
-                        own_clock=float(opponent_clock),
-                        opp_clock=float(my_clock),
-                        ply=ply,
-                        opp_last_think_s=0.0,
-                        avg_think_s=0.0,
-                        num_legal_moves=n,
-                        probs_tensor=maia_probs,
-                    )
+        maia_probs = torch.softmax(vals, dim=0)
+        ply = board.fullmove_number * 2 - (2 if board.turn == chess.WHITE else 1)
+        context_feats = compute_context_features(
+            board=board,
+            own_clock=float(opponent_clock),
+            opp_clock=float(my_clock),
+            ply=ply,
+            opp_last_think_s=0.0,
+            avg_think_s=0.0,
+            num_legal_moves=n,
+            probs_tensor=maia_probs,
+        )
 
-                    rows = []
-                    for slot_idx, m in enumerate(moves):
-                        rows.append(
-                            compute_move_features(
-                                board=board,
-                                move=m,
-                                maia_logit=vals[slot_idx].item(),
-                                maia_prob=maia_probs[slot_idx].item(),
-                                maia_log_rank=math.log(slot_idx + 1),
-                            )
-                            + context_feats
-                        )
+        rows = []
+        for slot_idx, m in enumerate(moves):
+            rows.append(
+                compute_move_features(
+                    board=board,
+                    move=m,
+                    maia_logit=vals[slot_idx].item(),
+                    maia_prob=maia_probs[slot_idx].item(),
+                    maia_log_rank=math.log(slot_idx + 1),
+                )
+                + context_feats
+            )
 
-                    X = torch.zeros(1, S, 28)
-                    X[0, :n] = torch.tensor(rows, dtype=torch.float)
-                    packed = torch.zeros(1, S)
-                    packed[0, :n] = vals
-                    mask_tensor = torch.zeros(1, S)
-                    mask_tensor[0, :n] = 1.0
+        X = torch.zeros(1, S, 28)
+        X[0, :n] = torch.tensor(rows, dtype=torch.float)
+        packed = torch.zeros(1, S)
+        packed[0, :n] = vals
+        mask_tensor = torch.zeros(1, S)
+        mask_tensor[0, :n] = 1.0
 
-                    with torch.no_grad():
-                        offsets, time_out = clone(X)
+        with torch.no_grad():
+            offsets, time_out = clone(X)
 
-                    scores = (packed + offsets).masked_fill(mask_tensor == 0, float("-inf"))
-                    slot = sample_move_index(scores[0, :n], temperature=0.7, top_p=0.85)
-                    chosen_move = moves[slot]
+        scores = (packed + offsets).masked_fill(mask_tensor == 0, float("-inf"))
+        slot = sample_move_index(scores[0, :n], temperature=0.7, top_p=0.85)
+        chosen_move = moves[slot]
 
-                    mean = time_out[0, slot, 0].item()
-                    log_std = time_out[0, slot, 1].item()
-                    sec = math.exp(mean + math.exp(log_std) * random.gauss(0, 1))
-                    think_time = round(max(0.4, min(sec, float(opponent_clock))), 1)
-        except Exception as e:
-            print(f"[Inference Error] Neural net forward pass failed: {e}")
-
-    # 2. Heuristic fallback if neural net is unavailable
-    if not chosen_move:
-        captures = [m for m in legal_moves if board.is_capture(m)]
-        checks = [m for m in legal_moves if board.gives_check(m)]
-        if checks and random.random() < 0.55:
-            chosen_move = random.choice(checks)
-        elif captures and random.random() < 0.65:
-            chosen_move = random.choice(captures)
-        else:
-            chosen_move = random.choice(legal_moves)
-
-    if think_time is None:
-        think_time = round(random.uniform(1.2, 3.5), 1)
+        mean = time_out[0, slot, 0].item()
+        log_std = time_out[0, slot, 1].item()
+        sec = math.exp(mean + math.exp(log_std) * random.gauss(0, 1))
+        think_time = round(max(0.4, min(sec, float(opponent_clock))), 1)
 
     new_opp_clock = max(0.0, round(opponent_clock - think_time, 1))
     san_move = board.san(chosen_move)

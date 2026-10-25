@@ -73,7 +73,7 @@ def get_or_calculate_odds(game_id: str, username: Optional[str] = None) -> List[
         return []
 
     actual_gid = game.get("game_id") or str(game.get("id"))
-    uid = username or game.get("player_id") or "stuffyness"
+    uid = username or game.get("player_id") or "guest"
     moves = game_repo.get_game_moves(actual_gid)
     if not moves:
         return []
