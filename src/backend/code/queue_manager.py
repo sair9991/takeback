@@ -1,6 +1,8 @@
 import asyncio
 import json
 import time
+import evaluator
+import gemma_service
 import helper
 
 queue = asyncio.Queue()
@@ -36,6 +38,11 @@ async def worker():
             (opp.lower(), f"models/{opp.lower()}.pt"),
         )
         if uid and gid:
+            try:
+                await asyncio.to_thread(evaluator.cache_game_odds, gid, uid)
+                await asyncio.to_thread(gemma_service.cache_game_commentary_and_narrative, gid, uid)
+            except Exception as e:
+                print(f"Error caching analysis for {gid}: {e}")
             helper.execute("INSERT OR IGNORE INTO analyzed_games (user_id, game_id) VALUES (?, ?)", (uid, gid))
 
         await broadcast(job_id, {"status": "completed", "progress": 100, "message": f"Model for {opp} cached"})

@@ -62,6 +62,10 @@ CREATE TABLE IF NOT EXISTS analyzed_games (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id TEXT NOT NULL,
     game_id TEXT NOT NULL,
+    odds TEXT,
+    commentary TEXT,
+    narrative TEXT,
+    narrative_tags TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(user_id, game_id),
     FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
@@ -80,6 +84,11 @@ def setup_database(db_path: Path = DB_PATH):
     print(f"Setting up database schema at: {db_path}")
     with sqlite3.connect(db_path) as conn:
         conn.executescript(SCHEMA_SQL)
+        # Migrate existing table if columns missing
+        existing_cols = {col[1] for col in conn.execute("PRAGMA table_info(analyzed_games)").fetchall()}
+        for col, col_type in [("odds", "TEXT"), ("commentary", "TEXT"), ("narrative", "TEXT"), ("narrative_tags", "TEXT")]:
+            if col not in existing_cols:
+                conn.execute(f"ALTER TABLE analyzed_games ADD COLUMN {col} {col_type}")
         conn.commit()
     print("Database setup complete.")
 

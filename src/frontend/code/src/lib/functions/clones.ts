@@ -80,3 +80,40 @@ export function getClones(query: string = ''): Clone[] {
     );
   });
 }
+
+export interface PredictStateRequest {
+  fen: string;
+  opponent_color: 'white' | 'black';
+  my_clock: number;
+  opponent_clock: number;
+  opponent_username?: string;
+}
+
+export interface PredictStateResponse {
+  move: string;
+  san: string;
+  uci: string;
+  fen: string;
+  think_time: number;
+  opponent_clock: number;
+  my_clock: number;
+  is_check: boolean;
+  is_game_over: boolean;
+}
+
+const API_BASE = 'http://localhost:8000';
+
+/**
+ * Predicts the next move and updated clock state for an opponent clone.
+ */
+export async function requestCloneMove(req: PredictStateRequest): Promise<PredictStateResponse> {
+  const res = await fetch(`${API_BASE}/api/predict_next_state`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to predict clone move: ${res.statusText}`);
+  }
+  return res.json();
+}

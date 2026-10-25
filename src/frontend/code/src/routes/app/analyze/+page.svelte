@@ -1,28 +1,87 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import GameCard from '../../../lib/components/GameCard.svelte';
   import NewAnalysisModal from '../../../lib/components/NewAnalysisModal.svelte';
-  import { getAnalyzedGames, type Game } from '../../../lib/functions/analyzedGames';
+  import { fetchAnalyzedGames, getAnalyzedGames, type Game } from '../../../lib/functions/analyzedGames';
+  import { requestGameAnalysis } from '../../../lib/functions/userGames';
 
   let games = $state<Game[]>(getAnalyzedGames());
   let selectedGame = $state<Game | null>(null);
   let isModalOpen = $state(false);
+
+  onMount(async () => {
+    const loaded = await fetchAnalyzedGames();
+    if (loaded && loaded.length > 0) {
+      games = loaded;
+    }
+  });
 
   // Open modal when '+' button is clicked
   function handleOpenModal() {
     isModalOpen = true;
   }
 
-  // Handle game added from modal (redirects to the game analysis page)
-  function handleImportGame(game: Game) {
-    games = [...games, game];
-    selectedGame = game;
-    console.log('Added new game for analysis:', game);
-    goto(`/app/analyze/${game.id}`);
+  // Handle game added from modal (checks model cache, enqueues if needed & streams status)
+  async function handleImportGame(game: Game) {
+    try {
+      const res = await requestGameAnalysis('stuffyness', game.id, game.opponent);
+
+      if (res.cached) {
+        games = [...games.filter((g) => g.id !== game.id), game];
+        selectedGame = game;
+        goto(`/app/analyze/${game.id}`);
+      } else {
+        // Opponent model not cached: Show card grayed out with loading indicator & stream progress
+        const trainingGame: Game = {
+          ...game,
+          isTraining: true,
+          trainingStatus: res.message || 'Queued for training...',
+          jobId: res.job_id,
+        };
+
+        games = [...games.filter((g) => g.id !== game.id), trainingGame];
+
+        if (res.job_id) {
+          const streamUrl = `http://localhost:8000/api/analysis/stream/${res.job_id}`;
+          const es = new EventSource(streamUrl);
+
+          es.onmessage = (event) => {
+            try {
+              const data = JSON.parse(event.data);
+              const idx = games.findIndex((g) => g.id === game.id);
+              if (idx !== -1) {
+                if (data.message) {
+                  games[idx].trainingStatus = data.message;
+                }
+                if (data.status === 'completed') {
+                  games[idx].isTraining = false;
+                  es.close();
+                } else if (data.status === 'failed') {
+                  games[idx].trainingStatus = `Failed: ${data.message || 'Error'}`;
+                  es.close();
+                }
+              }
+            } catch (err) {
+              console.error('Error parsing SSE event:', err);
+            }
+          };
+
+          es.onerror = () => {
+            es.close();
+          };
+        }
+      }
+    } catch (err) {
+      console.warn('Backend unavailable, importing directly:', err);
+      games = [...games.filter((g) => g.id !== game.id), game];
+      goto(`/app/analyze/${game.id}`);
+    }
   }
 
   // When clicking an existing game card, navigate to its analysis page
   function handleSelectGame(game: Game) {
+    if (game.isTraining) return;
     selectedGame = game;
     console.log('Selected game for analysis:', game);
     goto(`/app/analyze/${game.id}`);

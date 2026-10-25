@@ -226,5 +226,89 @@ export function getGameAnalysis(gameId?: string): GameAnalysisData {
   };
 }
 
+export interface MoveRecord {
+  ply: number;
+  side: string;
+  move: string;
+  time_remaining: number;
+  clock_str: string;
+}
+
+const API_BASE = 'http://localhost:8000';
+
+/**
+ * Fetches full game metadata along with real moves and clocks from the backend.
+ */
+export async function fetchGameDetail(
+  gameId: string
+): Promise<{
+  game: Game | null;
+  moves: string[];
+  records: MoveRecord[];
+  odds: number[];
+  commentary: CommentaryMoment[];
+  narrative: string;
+  error?: string;
+}> {
+  try {
+    const res = await fetch(`${API_BASE}/api/games/${gameId}`);
+    if (res.ok) {
+      const data = await res.json();
+      const { moves, odds, commentary, narrative, ...gameData } = data;
+      return {
+        game: gameData as Game,
+        moves: Array.isArray(moves) ? moves.map((m: any) => m.move) : [],
+        records: Array.isArray(moves) ? moves : [],
+        odds: Array.isArray(odds) ? odds : [],
+        commentary: Array.isArray(commentary) ? commentary : [],
+        narrative: typeof narrative === 'string' ? narrative : ''
+      };
+    } else {
+      const err = await res.json().catch(() => ({}));
+      return {
+        game: null,
+        moves: [],
+        records: [],
+        odds: [],
+        commentary: [],
+        narrative: '',
+        error: err.detail || 'Failed to load game detail'
+      };
+    }
+  } catch (err) {
+    console.warn('Backend game detail fetch failed:', err);
+    return {
+      game: null,
+      moves: [],
+      records: [],
+      odds: [],
+      commentary: [],
+      narrative: '',
+      error: String(err)
+    };
+  }
+}
+
+/**
+ * Fetches real moves and clocks for a game from the backend SQLite database.
+ */
+export async function fetchGameMoves(gameId: string): Promise<{ moves: string[]; records: MoveRecord[] }> {
+  try {
+    const res = await fetch(`${API_BASE}/api/games/${gameId}/moves`);
+    if (res.ok) {
+      const data: MoveRecord[] = await res.json();
+      if (Array.isArray(data) && data.length > 0) {
+        return {
+          moves: data.map((d) => d.move),
+          records: data
+        };
+      }
+    }
+  } catch (err) {
+    console.warn('Backend moves fetch failed, using fallback:', err);
+  }
+  return { moves: [], records: [] };
+}
+
 /** Alias for getGameAnalysis */
 export const getGameAnalysisData = getGameAnalysis;

@@ -1,6 +1,6 @@
 <script lang="ts">
   import GameCard from './GameCard.svelte';
-  import { getUserGames, type Game } from '../functions/userGames';
+  import { fetchUserGames, getUserGames, type Game } from '../functions/userGames';
 
   let {
     isOpen,
@@ -14,12 +14,12 @@
 
   type ViewType = 'menu' | 'video' | 'manual' | 'import';
   let currentView = $state<ViewType>('menu');
-  let userGames = $state<Game[]>([]);
+  let userGames = $state<Game[]>(getUserGames());
 
   // Function called when user clicks 'Import game' in the modal
-  function handleOpenImportView() {
-    userGames = getUserGames();
+  async function handleOpenImportView() {
     currentView = 'import';
+    userGames = await fetchUserGames();
   }
 
   // Reset to main menu whenever the modal is reopened
@@ -60,11 +60,7 @@
   }
 
   function handleSelectImport(game: Game) {
-    const newGame: Game = {
-      ...game,
-      id: String(Date.now())
-    };
-    onimport(newGame);
+    onimport(game);
     onclose();
   }
 </script>

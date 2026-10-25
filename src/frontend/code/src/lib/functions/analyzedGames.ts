@@ -1,6 +1,8 @@
 import type { Game } from '../types/game';
 export type { Game };
 
+const API_BASE = 'http://localhost:8000';
+
 export function getInitials(name: string): string {
   const parts = name.trim().split(/\s+/);
   if (parts.length >= 2) {
@@ -10,9 +12,26 @@ export function getInitials(name: string): string {
 }
 
 /**
- * Returns all games that the user has analyzed in the past.
- * Starts off with 0 default games.
+ * Synchronous initial fallback for analyzed games.
  */
-export function getAnalyzedGames(userId: string = 'current_user'): Game[] {
+export function getAnalyzedGames(): Game[] {
+  return [];
+}
+
+/**
+ * Fetches all games that the user has analyzed from the backend.
+ */
+export async function fetchAnalyzedGames(username: string = 'stuffyness'): Promise<Game[]> {
+  try {
+    const res = await fetch(`${API_BASE}/api/users/${username}/analyzed-games`);
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        return data;
+      }
+    }
+  } catch (err) {
+    console.warn('Backend not reachable for analyzed games:', err);
+  }
   return [];
 }

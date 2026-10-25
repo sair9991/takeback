@@ -1,17 +1,62 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { page } from '$app/state';
   import { Chess } from 'chess.js';
   import Chessboard from '../../../../lib/components/Chessboard.svelte';
-  import { getGameAnalysis, type CommentaryMoment } from '../../../../lib/functions/gameAnalysis';
+  import { getGameAnalysis, fetchGameDetail, fetchGameMoves, type CommentaryMoment, type MoveRecord } from '../../../../lib/functions/gameAnalysis';
+  import type { Game } from '../../../../lib/types/game';
 
   const gameId = $derived(page.params.id);
 
-  // Retrieve current game analysis dataset from dedicated function
+  // Real game metadata, moves, and odds fetched from SQLite backend
+  let activeGame = $state<Game | null>(null);
+  let realMoves = $state<string[]>([]);
+  let realRecords = $state<MoveRecord[]>([]);
+  let realOdds = $state<number[]>([]);
+  let realCommentary = $state<CommentaryMoment[]>([]);
+  let realNarrative = $state<string>('');
+  let backendError = $state<string | null>(null);
+
+  // Retrieve current game analysis dataset from dedicated function with backend override
   const analysisData = $derived(getGameAnalysis(gameId));
-  const currentGame = $derived(analysisData.game);
-  const samplePgnMoves = $derived(analysisData.moves);
-  const evaluationOdds = $derived(analysisData.evaluationOdds);
+  const currentGame = $derived(activeGame || analysisData.game);
+
+  onMount(async () => {
+    if (gameId) {
+      const detail = await fetchGameDetail(gameId);
+      if (detail.error) {
+        backendError = detail.error;
+      }
+      if (detail.game) {
+        activeGame = detail.game;
+      }
+      if (detail.moves.length > 0) {
+        realMoves = detail.moves;
+        realRecords = detail.records;
+        restartGame();
+      }
+      if (detail.odds && detail.odds.length > 0) {
+        realOdds = detail.odds;
+      }
+      if (detail.commentary && detail.commentary.length > 0) {
+        realCommentary = detail.commentary;
+      }
+      if (detail.narrative) {
+        realNarrative = detail.narrative;
+      }
+    }
+  });
+
+  const samplePgnMoves = $derived(realMoves.length > 0 ? realMoves : analysisData.moves);
+  const evaluationOdds = $derived.by(() => {
+    if (realOdds.length > 0) {
+      return realOdds;
+    }
+    if (analysisData.evaluationOdds.length >= samplePgnMoves.length) {
+      return analysisData.evaluationOdds;
+    }
+    return Array.from({ length: samplePgnMoves.length }, () => 50);
+  });
 
   // Chess game logic using chess.js
   let chess = new Chess();
@@ -21,10 +66,6 @@
   // View mode: 'expanded' (controls, odds, clock, chat) vs 'focused' (players, ratings)
   let viewMode = $state<'expanded' | 'focused'>('expanded');
 
-
-
-
-
   let currentMoveIndex = $state(-1);
   let isPlaying = $state(false);
   let playInterval: ReturnType<typeof setInterval> | null = null;
@@ -32,10 +73,14 @@
   // Active odds
   let yourOdds = $derived(
     currentMoveIndex >= 0 && currentMoveIndex < evaluationOdds.length
-      ? evaluationOdds[currentMoveIndex]
+      ? Math.round(evaluationOdds[currentMoveIndex] * 10) / 10
       : 50
   );
-  let theirOdds = $derived(100 - yourOdds);
+  let theirOdds = $derived(Math.round((100 - yourOdds) * 10) / 10);
+
+  function formatOdds(val: number): string {
+    return (Math.round(val * 10) / 10).toString();
+  }
 
   // Active moves for You and Them
   let activeWhiteMove = $derived.by(() => {
@@ -50,15 +95,29 @@
     return samplePgnMoves[lastBlackIndex] || '—';
   });
 
-  // Clocks calculated from moves made (simulating ticking game clocks)
+  // Clocks calculated from moves made (uses real database time_remaining if available)
   let youTime = $derived.by(() => {
     if (currentMoveIndex < 0) return 600;
+    if (realRecords.length > 0) {
+      for (let i = currentMoveIndex; i >= 0; i--) {
+        if (realRecords[i]?.side === 'white' && realRecords[i]?.time_remaining != null) {
+          return Math.round(realRecords[i].time_remaining);
+        }
+      }
+    }
     const whiteMovesCount = Math.floor((currentMoveIndex + 2) / 2);
     return Math.max(35, 600 - whiteMovesCount * 14);
   });
 
   let themTime = $derived.by(() => {
     if (currentMoveIndex < 1) return 600;
+    if (realRecords.length > 0) {
+      for (let i = currentMoveIndex; i >= 0; i--) {
+        if (realRecords[i]?.side === 'black' && realRecords[i]?.time_remaining != null) {
+          return Math.round(realRecords[i].time_remaining);
+        }
+      }
+    }
     const blackMovesCount = Math.floor((currentMoveIndex + 1) / 2);
     return Math.max(18, 600 - blackMovesCount * 16);
   });
@@ -73,6 +132,26 @@
   let lastAcknowledgedPivotalId = $state<string | null>(null);
 
   const gameCommentary = $derived.by<CommentaryMoment>(() => {
+    if (backendError) {
+      return {
+        phase: 'Error',
+        headline: 'Model Missing',
+        text: backendError,
+        isPivotal: true,
+        pivotalLabel: 'Error'
+      };
+    }
+    if (realCommentary.length > 0) {
+      if (currentMoveIndex < 0) {
+        return realCommentary[0] || analysisData.getCommentary(-1);
+      }
+      const targetIdx = currentMoveIndex + 1;
+      if (realCommentary[targetIdx]) {
+        return realCommentary[targetIdx];
+      }
+      const matched = realCommentary.find((c) => (c as any).ply === currentMoveIndex);
+      if (matched) return matched;
+    }
     return analysisData.getCommentary(currentMoveIndex);
   });
 
@@ -82,6 +161,7 @@
     currentFen = chess.fen();
     moveHistory = chess.history();
     currentMoveIndex = moveHistory.length - 1;
+    console.log(currentFen);
   }
 
   // Controls mode: 'buttons' (play, forward, backward) vs 'slider' (scrubber)
@@ -291,8 +371,8 @@
         moveNumber: moveNum,
         color: isWhite ? 'White' : 'Black',
         san: samplePgnMoves[i] || '',
-        yourOdds: val,
-        theirOdds: 100 - val,
+        yourOdds: Math.round(val * 10) / 10,
+        theirOdds: Math.round((100 - val) * 10) / 10,
         timeRemaining: formatTime(timeSec),
         x,
         y
@@ -363,6 +443,13 @@
             <span>Replay</span>
           </button>
         </div>
+
+        {#if backendError}
+          <div class="backend_error_banner" role="alert">
+            <span class="error_icon">⚠️</span>
+            <span>{backendError}</span>
+          </div>
+        {/if}
 
         <!-- EXPANDED ANALYSIS VIEW (expanded_analysis_page.png) -->
         <div class="expanded_grid">
@@ -499,11 +586,11 @@
               aria-label="Open odds progression graph modal"
             >
               <div class="capsule_half black_half">
-                <span class="odds_percent">{yourOdds}%</span>
+                <span class="odds_percent">{formatOdds(yourOdds)}%</span>
                 <span class="odds_label">Your Odds</span>
               </div>
               <div class="capsule_half gray_half">
-                <span class="odds_percent">{theirOdds}%</span>
+                <span class="odds_percent">{formatOdds(theirOdds)}%</span>
                 <span class="odds_label">Their Odds</span>
               </div>
             </div>
@@ -591,19 +678,21 @@
           <div class="player_info_card top_player">
             <h2 class="player_display_name">{currentGame.opponent}</h2>
             <div class="player_stats_row">
-              <span class="stat_badge">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="#38a169">
-                  <path d="M12 2a3.5 3.5 0 0 0-3.5 3.5c0 1.25.66 2.34 1.63 2.94C8.75 9.28 8 10.74 8 12.5c0 .35.03.69.09 1.02C7.3 13.9 6.78 14.61 6.78 15.45c0 1.13.92 2.05 2.05 2.05h6.34c1.13 0 2.05-.92 2.05-2.05 0-.84-.52-1.55-1.31-1.93.06-.33.09-.67.09-1.02 0-1.76-.75-3.22-2.13-4.06.97-.6 1.63-1.69 1.63-2.94A3.5 3.5 0 0 0 12 2zm-5 18a1 1 0 0 0-1 1v1h12v-1a1 1 0 0 0-1-1H7z"/>
-                </svg>
-                1600
-              </span>
-              <span class="stat_badge">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="12" cy="12" r="9"/>
-                  <polyline points="12 6 12 12 16 14"/>
-                </svg>
-                1600
-              </span>
+              {#if currentGame.opponent_elo != null}
+                <span class="stat_badge" title="Opponent Elo Rating">
+                  <img src="/chess_icon.svg" alt="Chess.com" class="rating_chess_logo" />
+                  {currentGame.opponent_elo}
+                </span>
+              {/if}
+              {#if currentGame.time_control}
+                <span class="stat_badge" title="Time Control">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="9"/>
+                    <polyline points="12 6 12 12 16 14"/>
+                  </svg>
+                  {Math.floor(parseInt(currentGame.time_control) / 60)} min
+                </span>
+              {/if}
             </div>
           </div>
 
@@ -620,21 +709,23 @@
           </div>
 
           <div class="player_info_card bottom_player">
-            <h2 class="player_display_name">Saaketh Kesireddy</h2>
+            <h2 class="player_display_name">You</h2>
             <div class="player_stats_row">
-              <span class="stat_badge">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="#38a169">
-                  <path d="M12 2a3.5 3.5 0 0 0-3.5 3.5c0 1.25.66 2.34 1.63 2.94C8.75 9.28 8 10.74 8 12.5c0 .35.03.69.09 1.02C7.3 13.9 6.78 14.61 6.78 15.45c0 1.13.92 2.05 2.05 2.05h6.34c1.13 0 2.05-.92 2.05-2.05 0-.84-.52-1.55-1.31-1.93.06-.33.09-.67.09-1.02 0-1.76-.75-3.22-2.13-4.06.97-.6 1.63-1.69 1.63-2.94A3.5 3.5 0 0 0 12 2zm-5 18a1 1 0 0 0-1 1v1h12v-1a1 1 0 0 0-1-1H7z"/>
-                </svg>
-                1600
-              </span>
-              <span class="stat_badge">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="12" cy="12" r="9"/>
-                  <polyline points="12 6 12 12 16 14"/>
-                </svg>
-                1600
-              </span>
+              {#if currentGame.player_elo != null}
+                <span class="stat_badge" title="Your Elo Rating">
+                  <img src="/chess_icon.svg" alt="Chess.com" class="rating_chess_logo" />
+                  {currentGame.player_elo}
+                </span>
+              {/if}
+              {#if currentGame.time_control}
+                <span class="stat_badge" title="Time Control">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="9"/>
+                    <polyline points="12 6 12 12 16 14"/>
+                  </svg>
+                  {Math.floor(parseInt(currentGame.time_control) / 60)} min
+                </span>
+              {/if}
             </div>
           </div>
         </div>
@@ -851,12 +942,12 @@
               <div class="hud_divider"></div>
               <div class="hud_item">
                 <span class="hud_label">Your Odds</span>
-                <span class="hud_value your_val">{activeInspectPoint.yourOdds}%</span>
+                <span class="hud_value your_val">{formatOdds(activeInspectPoint.yourOdds)}%</span>
               </div>
               <div class="hud_divider"></div>
               <div class="hud_item">
                 <span class="hud_label">Their Odds</span>
-                <span class="hud_value their_val">{activeInspectPoint.theirOdds}%</span>
+                <span class="hud_value their_val">{formatOdds(activeInspectPoint.theirOdds)}%</span>
               </div>
               <div class="hud_divider"></div>
               <div class="hud_item">
@@ -926,7 +1017,7 @@
                   class="point_interactive_group"
                   role="button"
                   tabindex="0"
-                  aria-label="Move {pt.moveNumber} {pt.color}: {pt.yourOdds}% win odds"
+                  aria-label="Move {pt.moveNumber} {pt.color}: {formatOdds(pt.yourOdds)}% win odds"
                   onmouseenter={() => (hoveredPointIndex = idx)}
                   onmouseleave={() => (hoveredPointIndex = null)}
                   onfocus={() => (hoveredPointIndex = idx)}
@@ -1017,6 +1108,25 @@
     transition: transform 0.15s ease, opacity 0.15s ease;
   }
 
+  .backend_error_banner {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    padding: 0.85rem 1.15rem;
+    background: #fef2f2;
+    border: 1.5px solid #ef4444;
+    color: #991b1b;
+    border-radius: 14px;
+    font-size: 13.5px;
+    font-weight: 600;
+    margin-bottom: 0.85rem;
+  }
+
+  .backend_error_banner .error_icon {
+    font-size: 16px;
+    flex-shrink: 0;
+  }
+
   .mode_toggle_pill:hover {
     transform: translateY(-2px);
     opacity: 0.92;
@@ -1070,16 +1180,7 @@
   }
 
 
-  @keyframes pivotalBadgeGlow {
-    0% {
-      transform: scale(0.98);
-      box-shadow: 0 0 3px rgba(0, 0, 0, 0.4);
-    }
-    100% {
-      transform: scale(1.04);
-      box-shadow: 0 0 8px rgba(0, 0, 0, 0.7);
-    }
-  }
+
 
   /* Main Workspace */
   .analysis_workspace {
@@ -1415,13 +1516,16 @@
     font-size: 11px;
     font-weight: 800;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
-    background: linear-gradient(135deg, #e8590c, #f76707);
+    letter-spacing: 0.05em;
+    background: #ec5d0b;
     color: #ffffff;
-    padding: 0.22rem 0.65rem;
-    border-radius: 999px;
-    box-shadow: 0 1px 4px rgba(232, 89, 12, 0.35);
-    animation: pivotalBadgeGlow 1.6s infinite alternate ease-in-out;
+    padding: 0.25rem 0.75rem;
+    border-radius: 9999px;
+    box-shadow: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    line-height: 1.2;
   }
 
   .commentary_header {
@@ -1585,6 +1689,14 @@
     font-size: 15px;
     font-weight: 700;
     color: #000000;
+  }
+
+  .rating_chess_logo {
+    width: 17px;
+    height: 17px;
+    object-fit: contain;
+    border-radius: 4px;
+    display: inline-block;
   }
 
   .restart_pill_btn {

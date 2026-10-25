@@ -29,8 +29,10 @@ def format_game(row: dict) -> dict:
     opp = row.get("opponent_username") or "Opponent"
     parts = opp.split()
     initials = (parts[0][0] + parts[1][0]).upper() if len(parts) >= 2 else opp[:2].upper()
+    gid = row.get("game_id") or str(row.get("id"))
     return {
-        "id": row.get("game_id") or str(row.get("id")),
+        "id": gid,
+        "player_id": row.get("player_id") or "You",
         "opponent": opp,
         "date": row.get("date") or "",
         "platform": "Chess.com" if (row.get("src") or "").lower() == "chess.com" else "Lichess",
@@ -38,4 +40,7 @@ def format_game(row: dict) -> dict:
         "result": row.get("result"),
         "time_control": row.get("time_control"),
         "player_color": row.get("player_color"),
+        "player_elo": row.get("player_elo"),
+        "opponent_elo": row.get("opponent_elo"),
+        "thumbnailUrl": f"/api/games/{gid}/thumbnail.svg",
     }

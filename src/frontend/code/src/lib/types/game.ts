@@ -9,4 +9,10 @@ export interface Game {
   trainingStatus?: string;
   trainingProgress?: number;
   jobId?: string;
+  player_id?: string;
+  player_elo?: number;
+  opponent_elo?: number;
+  player_color?: string;
+  result?: string;
+  time_control?: string;
 }
