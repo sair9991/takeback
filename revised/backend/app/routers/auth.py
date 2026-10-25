@@ -1,8 +1,8 @@
 import logging
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, status
 from fastapi.responses import RedirectResponse
 from app.config import settings
-from app.db.repositories import user_repo
+from app.db.repositories import user_repo, game_repo
 from app.dependencies import get_current_user
 from app.schemas.auth import (
     AuthSuccessResponse,
@@ -11,7 +11,7 @@ from app.schemas.auth import (
     UpdateProfileRequest,
     UserResponse,
 )
-from app.services import auth_service
+from app.services import auth_service, training_service
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ def clear_auth_cookie(response: Response) -> None:
 
 
 @router.post("/register", response_model=AuthSuccessResponse)
-def register(payload: RegisterRequest, response: Response):
+def register(payload: RegisterRequest, response: Response, background_tasks: BackgroundTasks):
     """Register a new account with email and password."""
     existing = user_repo.get_user_by_email(payload.email)
     if existing:
@@ -59,13 +59,20 @@ def register(payload: RegisterRequest, response: Response):
         chess_com_username=payload.chess_com_username,
     )
 
+    if payload.chess_com_username:
+        background_tasks.add_task(
+            training_service.sync_and_train_user_clone,
+            payload.chess_com_username,
+            user["user_id"],
+        )
+
     token = auth_service.create_access_token(user["user_id"])
     set_auth_cookie(response, token)
     return AuthSuccessResponse(user=UserResponse(**user))
 
 
 @router.post("/login", response_model=AuthSuccessResponse)
-def login(payload: LoginRequest, response: Response):
+def login(payload: LoginRequest, response: Response, background_tasks: BackgroundTasks):
     """Authenticate with email and password, setting an HTTP-only session cookie."""
     user = user_repo.get_user_by_email(payload.email)
     if not user or not user.get("password_hash"):
@@ -79,6 +86,14 @@ def login(payload: LoginRequest, response: Response):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
+        )
+
+    # Immediately cache games and train personal clone in the background upon login
+    if user.get("chess_com_username"):
+        background_tasks.add_task(
+            training_service.sync_and_train_user_clone,
+            user["chess_com_username"],
+            user["user_id"],
         )
 
     token = auth_service.create_access_token(user["user_id"])
@@ -100,7 +115,11 @@ def get_current_user_profile(user: dict = Depends(get_current_user)):
 
 
 @router.patch("/profile", response_model=UserResponse)
-def update_profile(payload: UpdateProfileRequest, user: dict = Depends(get_current_user)):
+def update_profile(
+    payload: UpdateProfileRequest,
+    background_tasks: BackgroundTasks,
+    user: dict = Depends(get_current_user),
+):
     """Update chess handle (Chess.com or Lichess username) for the authenticated user."""
     updated = user_repo.update_user_profile(
         user_id=user["user_id"],
@@ -109,7 +128,34 @@ def update_profile(payload: UpdateProfileRequest, user: dict = Depends(get_curre
     )
     if not updated:
         raise HTTPException(status_code=404, detail="User not found")
+
+    # Automatically start pulling in games and train clone when Chess.com username is linked
+    if payload.chess_com_username:
+        background_tasks.add_task(
+            training_service.sync_and_train_user_clone,
+            payload.chess_com_username,
+            user["user_id"],
+        )
+
     return UserResponse(**updated)
+
+
+@router.post("/sync-games")
+def trigger_sync_games(
+    background_tasks: BackgroundTasks,
+    user: dict = Depends(get_current_user),
+):
+    """Trigger background sync of latest games and clone model training for authenticated user."""
+    chess_handle = user.get("chess_com_username")
+    if not chess_handle:
+        raise HTTPException(status_code=400, detail="No Chess.com account linked to profile.")
+
+    background_tasks.add_task(
+        training_service.sync_and_train_user_clone,
+        chess_handle,
+        user["user_id"],
+    )
+    return {"status": "syncing", "username": chess_handle}
 
 
 @router.get("/google/login")
@@ -125,7 +171,7 @@ def google_login_redirect():
 
 
 @router.get("/google/callback")
-async def google_callback(code: str):
+async def google_callback(code: str, background_tasks: BackgroundTasks):
     """Handle authorization code callback from Google, issue session, and redirect to frontend."""
     try:
         profile = await auth_service.exchange_google_code_for_user(code)
@@ -145,6 +191,13 @@ async def google_callback(code: str):
         )
 
     user = user_repo.get_or_create_google_user(google_id, email)
+    if user.get("chess_com_username"):
+        background_tasks.add_task(
+            training_service.sync_and_train_user_clone,
+            user["chess_com_username"],
+            user["user_id"],
+        )
+
     token = auth_service.create_access_token(user["user_id"])
 
     redirect_url = f"{settings.FRONTEND_URL.rstrip('/')}/app"

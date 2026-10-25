@@ -57,6 +57,9 @@ def get_analysis_by_game(game_id: str, user_id: Optional[str] = None) -> Optiona
 
 def save_odds(user_id: str, game_id: str, odds: list[float]) -> None:
     """Atomically upsert evaluation odds into normalized 3NF evaluation rows."""
+    from app.db.repositories import user_repo
+    user_id = user_repo.ensure_user_exists(user_id)
+
     with transaction() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -90,6 +93,9 @@ def save_commentary_and_narrative(
     tags: list[str],
 ) -> None:
     """Atomically upsert coaching narrative, tags, and move evaluations into 3NF child tables."""
+    from app.db.repositories import user_repo
+    user_id = user_repo.ensure_user_exists(user_id)
+
     with transaction() as conn:
         with conn.cursor() as cur:
             cur.execute(

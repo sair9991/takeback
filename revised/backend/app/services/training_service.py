@@ -168,3 +168,36 @@ def run_training_pipeline(
     notify("completed", 100, f"Model for {opp} trained and cached!")
 
     return final_weights
+
+
+def sync_and_train_user_clone(chess_handle: str, user_id: str) -> None:
+    """Fetch user's games into PostgreSQL and train their personal AI clone model."""
+    from app.db.repositories import game_repo
+    from app.services import commentary_service
+    from app.workers import queue_manager
+
+    clean_handle = chess_handle.strip().lower()
+    logger.info("Starting automatic games cache & clone training for @%s (user %s)", clean_handle, user_id)
+
+    # 1. Fetch and cache recent games from Chess.com into PostgreSQL
+    try:
+        games = game_repo.sync_user_games_from_chess_com(clean_handle, user_id=user_id, limit=50)
+        logger.info("Cached %d games in database for @%s", len(games), clean_handle)
+    except Exception as e:
+        logger.warning("Error fetching games from Chess.com for @%s: %s", clean_handle, e)
+
+    # 2. Train personal AI clone if not already cached
+    if not queue_manager.is_cached(clean_handle):
+        try:
+            logger.info("Training personal clone network for @%s...", clean_handle)
+            run_training_pipeline(clean_handle, trained_by_user_id=user_id)
+            logger.info("Personal clone model successfully trained and registered for @%s", clean_handle)
+        except Exception as e:
+            logger.warning("Personal clone training error for @%s: %s", clean_handle, e)
+
+    # 3. Generate Gemma playing style profile & vector embeddings
+    try:
+        commentary_service.describe_clone_style(clean_handle, refresh=True)
+        logger.info("Gemma playing style profile generated for @%s", clean_handle)
+    except Exception as e:
+        logger.warning("Gemma style description error for @%s: %s", clean_handle, e)

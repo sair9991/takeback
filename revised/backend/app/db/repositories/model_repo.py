@@ -135,7 +135,7 @@ def search_clones_by_style(
     sql_text = """
         SELECT m.player_id, m.model_name, m.style_description, m.val_accuracy,
                COALESCE(stats.access_count, 0) AS access_count,
-               0.5 AS similarity_score
+               NULL::float AS similarity_score
         FROM models m
         LEFT JOIN (
             SELECT player_id, COUNT(*) AS access_count

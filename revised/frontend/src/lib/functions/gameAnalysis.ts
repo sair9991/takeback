@@ -203,14 +203,13 @@ export function getGameAnalysis(gameId?: string): GameAnalysisData {
   const analyzedGames = getAnalyzedGames();
   const userGames = getUserGames();
 
-  // Find game across analyzed or user games, or provide a default fallback
   const found = analyzedGames.find((g) => g.id === gameId) ||
                 userGames.find((g) => g.id === gameId);
 
   const game: Game = found ? { ...found } : {
-    id: gameId || '1',
-    opponent: 'Opponent Name',
-    date: 'January 1st, 2026',
+    id: gameId || 'unknown',
+    opponent: 'Opponent',
+    date: '',
     platform: 'Chess.com'
   };
 
@@ -220,9 +219,13 @@ export function getGameAnalysis(gameId?: string): GameAnalysisData {
 
   return {
     game,
-    moves: samplePgnMoves,
-    evaluationOdds,
-    getCommentary: (ply: number) => getCommentaryForPly(ply, game)
+    moves: [],
+    evaluationOdds: [],
+    getCommentary: (_ply: number) => ({
+      phase: 'Analysis',
+      headline: 'No commentary generated',
+      text: 'Analysis has not been run for this game yet.'
+    })
   };
 }
 

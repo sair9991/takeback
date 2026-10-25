@@ -40,4 +40,4 @@ class CloneSearchResult(BaseModel):
     style_description: Optional[str] = None
     val_accuracy: Optional[float] = None
     access_count: int = 0
-    similarity_score: float = Field(default=0.0, description="Semantic match relevance score (0.0 to 1.0)")
+    similarity_score: Optional[float] = Field(default=None, description="Semantic match relevance score (0.0 to 1.0)")

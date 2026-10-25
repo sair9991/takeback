@@ -26,6 +26,36 @@ def get_user_by_google_id(google_id: str) -> Optional[dict[str, Any]]:
     return query_one(sql, (google_id,))
 
 
+def get_user_by_chess_handle(handle: str) -> Optional[dict[str, Any]]:
+    """Retrieve user record by Chess.com handle (case-insensitive)."""
+    if not handle:
+        return None
+    sql = "SELECT * FROM users WHERE LOWER(chess_com_username) = LOWER(%s)"
+    return query_one(sql, (handle.strip(),))
+
+
+def ensure_user_exists(user_id: str, chess_com_username: Optional[str] = None) -> str:
+    """Ensure a user record exists for foreign key constraints, creating a shadow player record if needed."""
+    clean_id = (user_id or "guest").strip()
+    existing = get_user_by_id(clean_id)
+    if existing:
+        return existing["user_id"]
+
+    if chess_com_username:
+        by_handle = get_user_by_chess_handle(chess_com_username)
+        if by_handle:
+            return by_handle["user_id"]
+
+    sql = """
+        INSERT INTO users (user_id, chess_com_username)
+        VALUES (%s, %s)
+        ON CONFLICT (user_id) DO UPDATE SET
+            chess_com_username = COALESCE(users.chess_com_username, EXCLUDED.chess_com_username)
+    """
+    execute(sql, (clean_id, chess_com_username or clean_id))
+    return clean_id
+
+
 def create_user_with_password(
     email: str,
     password_hash: str,

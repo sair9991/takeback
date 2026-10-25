@@ -16,6 +16,15 @@ TAG_RE = re.compile(r'\[(\w+)\s+"([^"]*)"\]')
 CLK_RE = re.compile(r"\[%clk\s+(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)\]")
 
 
+def parse_clock(comment: str) -> Optional[float]:
+    """'{[%clk 0:09:58.8]}' comment text -> seconds left (598.8), or None."""
+    m = CLK_RE.search(comment or "")
+    if not m:
+        return None
+    hours = int(m.group(1) or 0)
+    return round(hours * 3600 + int(m.group(2)) * 60 + float(m.group(3)), 3)
+
+
 def _get_json(url: str) -> Any:
     req = urllib.request.Request(url, headers=HEADERS)
     for attempt in range(3):
@@ -64,25 +73,39 @@ def parse_game_chunk(chunk: str, username: str, require_600: bool = False) -> Op
     if require_600 and time_control != "600":
         return None
 
-    white = tags.get("White", "").strip().lower()
-    black = tags.get("Black", "").strip().lower()
+    white_raw = tags.get("White", "").strip()
+    black_raw = tags.get("Black", "").strip()
+    white = white_raw.lower()
+    black = black_raw.lower()
     user_clean = username.strip().lower()
 
     if user_clean not in (white, black):
         return None
 
+    is_white = user_clean == white
+    player_color = "white" if is_white else "black"
+    opponent = black_raw if is_white else white_raw
+    player_elo = tags.get("WhiteElo", "") if is_white else tags.get("BlackElo", "")
+    opponent_elo = tags.get("BlackElo", "") if is_white else tags.get("WhiteElo", "")
+
     return {
+        "player_id": user_clean,
+        "date": tags.get("Date", ""),
+        "player_color": player_color,
+        "time_control": time_control,
+        "player_elo": player_elo,
+        "opponent": opponent,
+        "opponent_elo": opponent_elo,
+        "result": tags.get("Result", ""),
+        "moves": movetext,
+        "movetext": movetext,
         "event": tags.get("Event", ""),
         "site": tags.get("Site", ""),
-        "date": tags.get("Date", ""),
-        "white": tags.get("White", ""),
-        "black": tags.get("Black", ""),
-        "result": tags.get("Result", ""),
+        "white": white_raw,
+        "black": black_raw,
         "white_elo": tags.get("WhiteElo", ""),
         "black_elo": tags.get("BlackElo", ""),
-        "time_control": time_control,
         "termination": tags.get("Termination", ""),
-        "movetext": movetext,
     }
 
 

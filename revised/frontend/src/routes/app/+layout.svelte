@@ -3,6 +3,7 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { logout, getMe } from '../../lib/functions/auth';
+  import { fetchUserGames } from '../../lib/functions/userGames';
   import '../../app.css';
 	import type { LayoutProps } from './$types';
 
@@ -12,6 +13,9 @@
     const user = await getMe();
     if (user && !user.chess_com_username) {
       goto('/?connect=true');
+    } else if (user?.chess_com_username) {
+      // Automatically pull in their games from Chess.com upon login
+      fetchUserGames(user.chess_com_username, true).catch(() => {});
     }
   });
 

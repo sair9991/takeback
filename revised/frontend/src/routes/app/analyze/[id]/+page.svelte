@@ -9,7 +9,7 @@
 
   const gameId = $derived(page.params.id);
 
-  // Real game metadata, moves, and odds fetched from SQLite backend
+  // Real game metadata, moves, and odds fetched from backend
   let activeGame = $state<Game | null>(null);
   let realMoves = $state<string[]>([]);
   let realRecords = $state<MoveRecord[]>([]);
@@ -17,56 +17,63 @@
   let realCommentary = $state<CommentaryMoment[]>([]);
   let realNarrative = $state<string>('');
   let backendError = $state<string | null>(null);
+  let isLoadingGame = $state(true);
 
-  // Retrieve current game analysis dataset from dedicated function with backend override
-  const analysisData = $derived(getGameAnalysis(gameId));
-  const currentGame = $derived(activeGame || analysisData.game);
+  const currentGame = $derived(
+    activeGame || {
+      id: gameId,
+      opponent: 'Opponent',
+      date: '',
+      platform: 'Chess.com'
+    }
+  );
 
   onMount(async () => {
     if (gameId) {
-      const detail = await fetchGameDetail(gameId);
-      if (detail.error) {
-        backendError = detail.error;
-      }
-      if (detail.game) {
-        activeGame = detail.game;
-      } else {
-        // Fallback: search user's games from backend
-        try {
-          const { fetchUserGames } = await import('../../../../lib/functions/userGames');
-          const allUserGames = await fetchUserGames();
-          const matched = allUserGames.find((g) => g.id === gameId || String(g.id) === String(gameId));
-          if (matched) activeGame = matched;
-        } catch (e) {
-          console.warn('Fallback game lookup failed:', e);
+      isLoadingGame = true;
+      try {
+        const detail = await fetchGameDetail(gameId);
+        if (detail.error) {
+          backendError = detail.error;
         }
-      }
-      if (detail.moves.length > 0) {
-        realMoves = detail.moves;
-        realRecords = detail.records;
-        restartGame();
-      }
-      if (detail.odds && detail.odds.length > 0) {
-        realOdds = detail.odds;
-      }
-      if (detail.commentary && detail.commentary.length > 0) {
-        realCommentary = detail.commentary;
-      }
-      if (detail.narrative) {
-        realNarrative = detail.narrative;
+        if (detail.game) {
+          activeGame = detail.game;
+        } else {
+          try {
+            const { fetchUserGames } = await import('../../../../lib/functions/userGames');
+            const allUserGames = await fetchUserGames();
+            const matched = allUserGames.find((g) => g.id === gameId || String(g.id) === String(gameId));
+            if (matched) activeGame = matched;
+          } catch (e) {
+            console.warn('Game lookup failed:', e);
+          }
+        }
+        if (detail.moves && detail.moves.length > 0) {
+          realMoves = detail.moves;
+          realRecords = detail.records;
+          restartGame();
+        }
+        if (detail.odds && detail.odds.length > 0) {
+          realOdds = detail.odds;
+        }
+        if (detail.commentary && detail.commentary.length > 0) {
+          realCommentary = detail.commentary;
+        }
+        if (detail.narrative) {
+          realNarrative = detail.narrative;
+        }
+      } finally {
+        isLoadingGame = false;
       }
     }
   });
 
-  const samplePgnMoves = $derived(realMoves.length > 0 ? realMoves : analysisData.moves);
+  const samplePgnMoves = $derived(realMoves);
   const evaluationOdds = $derived.by(() => {
     if (realOdds.length > 0) {
       return realOdds;
     }
-    if (analysisData.evaluationOdds.length >= samplePgnMoves.length) {
-      return analysisData.evaluationOdds;
-    }
-    return Array.from({ length: samplePgnMoves.length }, () => 50);
+    return samplePgnMoves.map(() => 50);
   });
 
   // Chess game logic using chess.js
@@ -304,7 +311,11 @@
     }
     if (realCommentary.length > 0) {
       if (currentMoveIndex < 0) {
-        return realCommentary[0] || analysisData.getCommentary(-1);
+        return realCommentary[0] || {
+          phase: 'Overview',
+          headline: 'Game Ready for Review',
+          text: realNarrative || 'Use the move controls below to step through each position.'
+        };
       }
       const targetIdx = currentMoveIndex + 1;
       if (realCommentary[targetIdx]) {
@@ -313,7 +324,11 @@
       const matched = realCommentary.find((c) => (c as any).ply === currentMoveIndex);
       if (matched) return matched;
     }
-    return analysisData.getCommentary(currentMoveIndex);
+    return {
+      phase: 'Coaching',
+      headline: realNarrative ? 'Game Narrative' : 'No commentary generated',
+      text: realNarrative || 'Coaching commentary has not been generated for this game yet.'
+    };
   });
 
   // Move handling
@@ -806,19 +821,25 @@
               title="Click to view move history"
               aria-label="Open move history modal"
             >
-              <div class="moves_column">
-                <span class="moves_label">You</span>
-                <span class="move_pill white_pill">
-                  {activeWhiteMove}
-                </span>
-              </div>
-              <div class="moves_divider"></div>
-              <div class="moves_column">
-                <span class="moves_label">Them</span>
-                <span class="move_pill black_pill">
-                  {activeBlackMove}
-                </span>
-              </div>
+              {#if samplePgnMoves.length === 0}
+                <div class="empty_moves_notice">
+                  <span>No moves recorded</span>
+                </div>
+              {:else}
+                <div class="moves_column">
+                  <span class="moves_label">You</span>
+                  <span class="move_pill white_pill">
+                    {activeWhiteMove}
+                  </span>
+                </div>
+                <div class="moves_divider"></div>
+                <div class="moves_column">
+                  <span class="moves_label">Them</span>
+                  <span class="move_pill black_pill">
+                    {activeBlackMove}
+                  </span>
+                </div>
+              {/if}
             </div>
           </div>
 
@@ -1668,6 +1689,14 @@
     align-items: center;
     padding: 0.5rem 1rem;
     box-sizing: border-box;
+  }
+
+  .empty_moves_notice {
+    width: 100%;
+    text-align: center;
+    font-size: 13.5px;
+    font-weight: 600;
+    color: #4b5563;
   }
 
   .moves_column {
