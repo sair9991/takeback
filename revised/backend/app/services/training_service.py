@@ -121,7 +121,11 @@ def train_clone_mlp(dataset_or_tensors: Union[Path, dict[str, torch.Tensor]], ou
     return out_weights
 
 
-def run_training_pipeline(opp: str, broadcast_cb: Optional[Callable[[str, int, str], None]] = None) -> Path:
+def run_training_pipeline(
+    opp: str,
+    broadcast_cb: Optional[Callable[[str, int, str], None]] = None,
+    trained_by_user_id: Optional[str] = None,
+) -> Path:
     """Run end-to-end training pipeline in memory without creating intermediate CSV files."""
     def notify(status: str, progress: int, msg: str):
         logger.info("[Training: %s] %d%% - %s", opp, progress, msg)
@@ -160,7 +164,7 @@ def run_training_pipeline(opp: str, broadcast_cb: Optional[Callable[[str, int, s
     train_clone_mlp(tensors, final_weights)
 
     # Step 4: Register model checkpoint in PostgreSQL models table
-    model_repo.register_model_weights(opp_clean, f"models/{opp_clean}.pt")
+    model_repo.register_model_weights(opp_clean, f"models/{opp_clean}.pt", trained_by_user_id=trained_by_user_id)
     notify("completed", 100, f"Model for {opp} trained and cached!")
 
     return final_weights

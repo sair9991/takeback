@@ -14,7 +14,7 @@ CREATE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id);
 
 CREATE TABLE IF NOT EXISTS games (
     id BIGSERIAL PRIMARY KEY,
-    player_id VARCHAR(64) NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    player_id VARCHAR(64) NOT NULL,
     game_id VARCHAR(128) UNIQUE NOT NULL,
     src VARCHAR(32) NOT NULL,
     player_color VARCHAR(10) NOT NULL,
@@ -40,20 +40,36 @@ CREATE TABLE IF NOT EXISTS moves (
 );
 
 CREATE TABLE IF NOT EXISTS models (
-    player_id VARCHAR(64) PRIMARY KEY REFERENCES users(user_id) ON DELETE CASCADE,
+    player_id VARCHAR(64) PRIMARY KEY,
+    trained_by_user_id VARCHAR(64),
     weights_path TEXT NOT NULL,
     weights_blob BYTEA,
     model_name VARCHAR(64) DEFAULT 'clone',
     val_accuracy REAL,
     val_loss REAL,
     eval_stats JSONB,
+    access_count BIGINT DEFAULT 0,
+    last_accessed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE INDEX IF NOT EXISTS idx_models_trained_by ON models(trained_by_user_id);
+
+CREATE TABLE IF NOT EXISTS model_access_logs (
+    id BIGSERIAL PRIMARY KEY,
+    player_id VARCHAR(64) NOT NULL,
+    accessed_by_user_id VARCHAR(64),
+    think_time REAL,
+    accessed_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_model_logs_player ON model_access_logs(player_id, accessed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_model_logs_user ON model_access_logs(accessed_by_user_id, accessed_at DESC);
+
 CREATE TABLE IF NOT EXISTS analyzed_games (
     id BIGSERIAL PRIMARY KEY,
-    user_id VARCHAR(64) NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    user_id VARCHAR(64) NOT NULL,
     game_id VARCHAR(128) NOT NULL,
     odds JSONB,
     commentary JSONB,
@@ -63,7 +79,6 @@ CREATE TABLE IF NOT EXISTS analyzed_games (
     UNIQUE(user_id, game_id)
 );
 
--- composite index to satisfy games pagination without filesort
 CREATE INDEX IF NOT EXISTS idx_games_player_date ON games(player_id, date DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_games_game_id ON games(game_id);
 CREATE INDEX IF NOT EXISTS idx_moves_game_ply ON moves(game_id, ply ASC);

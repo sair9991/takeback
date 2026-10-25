@@ -93,6 +93,7 @@ def predict_clone_move(
     opponent_username: Optional[str] = None,
     opponent_elo: Optional[int] = None,
     my_elo: Optional[int] = None,
+    accessed_by_user_id: Optional[str] = None,
 ) -> PredictStateResponse:
     board = chess.Board(fen)
     legal_moves = list(board.legal_moves)
@@ -216,6 +217,16 @@ def predict_clone_move(
     san_move = board.san(chosen_move)
     uci_move = chosen_move.uci()
     board.push(chosen_move)
+
+    if opponent_username:
+        try:
+            model_repo.record_model_access(
+                opponent_username,
+                accessed_by_user_id=accessed_by_user_id,
+                think_time=think_time,
+            )
+        except Exception:
+            pass
 
     return PredictStateResponse(
         move=san_move,

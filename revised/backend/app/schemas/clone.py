@@ -10,6 +10,7 @@ class PredictStateRequest(BaseModel):
     opponent_username: Optional[str] = Field(default=None, description="Opponent's handle/ID")
     opponent_elo: Optional[int] = Field(default=None, description="Opponent Elo rating")
     my_elo: Optional[int] = Field(default=None, description="Player Elo rating")
+    user_id: Optional[str] = Field(default=None, description="Requesting user ID or handle")
 
 
 class PredictStateResponse(BaseModel):

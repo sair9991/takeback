@@ -39,6 +39,7 @@ async def worker():
                 training_service.run_training_pipeline,
                 opp,
                 broadcast_progress,
+                uid,
             )
 
             if uid and gid:
