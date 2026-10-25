@@ -1,6 +1,6 @@
 <script lang="ts">
   import GameCard from './GameCard.svelte';
-  import { type Game } from '../functions/games';
+  import { fetchUserGames, getUserGames, type Game } from '../functions/userGames';
 
   let {
     isOpen,
@@ -14,6 +14,13 @@
 
   type ViewType = 'menu' | 'video' | 'manual' | 'import';
   let currentView = $state<ViewType>('menu');
+  let userGames = $state<Game[]>(getUserGames());
+
+  // Function called when user clicks 'Import game' in the modal
+  async function handleOpenImportView() {
+    currentView = 'import';
+    userGames = await fetchUserGames();
+  }
 
   // Reset to main menu whenever the modal is reopened
   $effect(() => {
@@ -26,24 +33,6 @@
   const dummyMoves = [
     { youTime: '10:00', youMove: 'Be4', themTime: '10:00', themMove: 'Be4' },
     { youTime: '9:30', youMove: 'Be4', themTime: '9:30', themMove: 'Be4' }
-  ];
-
-  // Dummy games available for import (matching add_new_analysis_game.png)
-  const importableGames: Game[] = [
-    {
-      id: 'import-1',
-      opponent: 'Opponent Name',
-      date: 'January 1st, 2026',
-      platform: 'Chess.com',
-      initials: 'OP'
-    },
-    {
-      id: 'import-2',
-      opponent: 'Opponent Name',
-      date: 'January 1st, 2026',
-      platform: 'Chess.com',
-      initials: 'OP'
-    }
   ];
 
   function handleVideoUpload() {
@@ -71,11 +60,7 @@
   }
 
   function handleSelectImport(game: Game) {
-    const newGame: Game = {
-      ...game,
-      id: String(Date.now())
-    };
-    onimport(newGame);
+    onimport(game);
     onclose();
   }
 </script>
@@ -141,7 +126,7 @@
             </div>
           </button>
 
-          <button class="option_card" onclick={() => (currentView = 'import')}>
+          <button class="option_card" onclick={handleOpenImportView}>
             <div class="option_preview">
               <span>[Gif showing Chess.com or LiChess import]</span>
             </div>
@@ -215,7 +200,7 @@
       {:else if currentView === 'import'}
         <div class="import_view">
           <div class="import_games_grid">
-            {#each importableGames as game}
+            {#each userGames as game (game.id)}
               <GameCard {game} onclick={() => handleSelectImport(game)} />
             {/each}
           </div>
@@ -242,9 +227,10 @@
     background: #ffffff;
     border-radius: 20px;
     width: 92%;
-    max-width: 680px;
+    max-width: 880px;
     max-height: 88vh;
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 1.75rem 2rem;
     box-shadow: 0 20px 45px rgba(0, 0, 0, 0.25);
     z-index: 1001;
@@ -520,15 +506,16 @@
 
   /* 4. Import View */
   .import_view {
-    padding: 0.5rem 0;
+    padding: 0.5rem 0 1rem 0;
+    width: 100%;
   }
 
   .import_games_grid {
     display: flex;
+    flex-wrap: wrap;
     gap: 1.5rem;
     justify-content: center;
-    overflow-x: auto;
-    padding: 0.5rem;
+    padding: 0.5rem 0.25rem;
   }
 
   /* Mobile responsiveness */

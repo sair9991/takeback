@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getInitials, type Game } from '../functions/games';
+  import { getInitials, type Game } from '../functions/analyzedGames';
 
   let { game, onclick }: { game: Game; onclick?: () => void } = $props();
 
@@ -7,23 +7,48 @@
   const platformIcon = $derived(
     game.platform.toLowerCase().includes('lichess') ? '/lichess_icon.svg' : '/chess_icon.svg'
   );
+
+  const previewUrl = $derived.by(() => {
+    if (game.thumbnailUrl) {
+      return game.thumbnailUrl.startsWith('http')
+        ? game.thumbnailUrl
+        : `http://localhost:8000${game.thumbnailUrl}`;
+    }
+    return `http://localhost:8000/api/games/${game.id}/thumbnail.svg`;
+  });
+
+  function handleClick() {
+    if (game.isTraining) return;
+    onclick?.();
+  }
 </script>
 
 <div
-  class="game_card"
+  class="game_card {game.isTraining ? 'is_training' : ''}"
   role="button"
-  tabindex="0"
-  {onclick}
+  tabindex={game.isTraining ? -1 : 0}
+  onclick={handleClick}
   onkeydown={(e) => {
-    if (e.key === 'Enter' || e.key === ' ') {
+    if (!game.isTraining && (e.key === 'Enter' || e.key === ' ')) {
       e.preventDefault();
-      onclick?.();
+      handleClick();
     }
   }}
 >
   <div class="card_preview">
-    {#if game.thumbnailUrl}
-      <img src={game.thumbnailUrl} alt="Game preview against {game.opponent}" class="preview_img" />
+    {#if game.isTraining}
+      <div class="training_overlay">
+        <div class="spinner_ring"></div>
+        <span class="training_label">Training Model</span>
+        <span class="training_status_text">{game.trainingStatus || 'Queued...'}</span>
+      </div>
+    {:else}
+      <img
+        src={previewUrl}
+        alt="Game preview against {game.opponent}"
+        class="preview_img"
+        loading="lazy"
+      />
     {/if}
   </div>
 
@@ -56,13 +81,20 @@
     background: #ffffff;
     cursor: pointer;
     flex-shrink: 0;
-    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.2s ease;
     user-select: none;
   }
 
-  .game_card:hover {
+  .game_card:hover:not(.is_training) {
     transform: translateY(-3px);
     box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
+  }
+
+  .game_card.is_training {
+    opacity: 0.78;
+    filter: grayscale(0.2);
+    cursor: not-allowed;
+    background: #f5f5f5;
   }
 
   .game_card:focus-visible {
@@ -79,12 +111,62 @@
     align-items: center;
     justify-content: center;
     overflow: hidden;
+    position: relative;
   }
 
   .preview_img {
     width: 100%;
     height: 100%;
     object-fit: cover;
+  }
+
+  .training_overlay {
+    width: 100%;
+    height: 100%;
+    background: #eaeaea;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 1.25rem 1rem;
+    box-sizing: border-box;
+    text-align: center;
+    gap: 0.65rem;
+  }
+
+  .spinner_ring {
+    width: 32px;
+    height: 32px;
+    border: 3px solid #cfcfcf;
+    border-top: 3px solid var(--accent-1, #e8590c);
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+  }
+
+  @keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+
+  .training_label {
+    font-size: 13px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #000000;
+  }
+
+  .training_status_text {
+    font-size: 12px;
+    font-weight: 600;
+    color: #4b5563;
+    line-height: 1.35;
+    animation: pulse 1.6s ease-in-out infinite alternate;
+  }
+
+  @keyframes pulse {
+    0% { opacity: 0.7; }
+    100% { opacity: 1; }
   }
 
   .card_details {

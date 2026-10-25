@@ -1,22 +1,62 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { page } from '$app/state';
   import { Chess } from 'chess.js';
   import Chessboard from '../../../../lib/components/Chessboard.svelte';
-  import { getDummyGames, type Game } from '../../../../lib/functions/games';
+  import { getGameAnalysis, fetchGameDetail, fetchGameMoves, type CommentaryMoment, type MoveRecord } from '../../../../lib/functions/gameAnalysis';
+  import type { Game } from '../../../../lib/types/game';
 
   const gameId = $derived(page.params.id);
 
-  // Retrieve current game or fallback
-  const allGames = getDummyGames();
-  const currentGame = $derived(
-    allGames.find((g) => g.id === gameId) || {
-      id: gameId || '1',
-      opponent: 'Opponent Name',
-      date: 'January 1st, 2026',
-      platform: 'Chess.com'
+  // Real game metadata, moves, and odds fetched from SQLite backend
+  let activeGame = $state<Game | null>(null);
+  let realMoves = $state<string[]>([]);
+  let realRecords = $state<MoveRecord[]>([]);
+  let realOdds = $state<number[]>([]);
+  let realCommentary = $state<CommentaryMoment[]>([]);
+  let realNarrative = $state<string>('');
+  let backendError = $state<string | null>(null);
+
+  // Retrieve current game analysis dataset from dedicated function with backend override
+  const analysisData = $derived(getGameAnalysis(gameId));
+  const currentGame = $derived(activeGame || analysisData.game);
+
+  onMount(async () => {
+    if (gameId) {
+      const detail = await fetchGameDetail(gameId);
+      if (detail.error) {
+        backendError = detail.error;
+      }
+      if (detail.game) {
+        activeGame = detail.game;
+      }
+      if (detail.moves.length > 0) {
+        realMoves = detail.moves;
+        realRecords = detail.records;
+        restartGame();
+      }
+      if (detail.odds && detail.odds.length > 0) {
+        realOdds = detail.odds;
+      }
+      if (detail.commentary && detail.commentary.length > 0) {
+        realCommentary = detail.commentary;
+      }
+      if (detail.narrative) {
+        realNarrative = detail.narrative;
+      }
     }
-  );
+  });
+
+  const samplePgnMoves = $derived(realMoves.length > 0 ? realMoves : analysisData.moves);
+  const evaluationOdds = $derived.by(() => {
+    if (realOdds.length > 0) {
+      return realOdds;
+    }
+    if (analysisData.evaluationOdds.length >= samplePgnMoves.length) {
+      return analysisData.evaluationOdds;
+    }
+    return Array.from({ length: samplePgnMoves.length }, () => 50);
+  });
 
   // Chess game logic using chess.js
   let chess = new Chess();
@@ -26,48 +66,6 @@
   // View mode: 'expanded' (controls, odds, clock, chat) vs 'focused' (players, ratings)
   let viewMode = $state<'expanded' | 'focused'>('expanded');
 
-  // Complete classic sample game for replay: Paul Morphy's Opera Game (33 plies, finishes with checkmate)
-  const samplePgnMoves = [
-    'e4', 'e5',
-    'Nf3', 'd6',
-    'd4', 'Bg4',
-    'dxe5', 'Bxf3',
-    'Qxf3', 'dxe5',
-    'Bc4', 'Nf6',
-    'Qb3', 'Qe7',
-    'Nc3', 'c6',
-    'Bg5', 'b5',
-    'Nxb5', 'cxb5',
-    'Bxb5+', 'Nbd7',
-    'O-O-O', 'Rd8',
-    'Rxd7', 'Rxd7',
-    'Rd1', 'Qe6',
-    'Bxd7+', 'Nxd7',
-    'Qb8+', 'Nxb8',
-    'Rd8#'
-  ];
-
-  // Dynamic evaluation odds progression (starts at 50/50, ends at 100/0 checkmate)
-  const evaluationOdds = [
-    50, 50,
-    52, 51,
-    54, 53,
-    57, 55,
-    60, 58,
-    65, 62,
-    69, 66,
-    73, 70,
-    76, 73,
-    80, 77,
-    84, 82,
-    88, 85,
-    91, 89,
-    94, 92,
-    96, 95,
-    98, 97,
-    100
-  ];
-
   let currentMoveIndex = $state(-1);
   let isPlaying = $state(false);
   let playInterval: ReturnType<typeof setInterval> | null = null;
@@ -75,10 +73,14 @@
   // Active odds
   let yourOdds = $derived(
     currentMoveIndex >= 0 && currentMoveIndex < evaluationOdds.length
-      ? evaluationOdds[currentMoveIndex]
+      ? Math.round(evaluationOdds[currentMoveIndex] * 10) / 10
       : 50
   );
-  let theirOdds = $derived(100 - yourOdds);
+  let theirOdds = $derived(Math.round((100 - yourOdds) * 10) / 10);
+
+  function formatOdds(val: number): string {
+    return (Math.round(val * 10) / 10).toString();
+  }
 
   // Active moves for You and Them
   let activeWhiteMove = $derived.by(() => {
@@ -93,15 +95,29 @@
     return samplePgnMoves[lastBlackIndex] || '—';
   });
 
-  // Clocks calculated from moves made (simulating ticking game clocks)
+  // Clocks calculated from moves made (uses real database time_remaining if available)
   let youTime = $derived.by(() => {
     if (currentMoveIndex < 0) return 600;
+    if (realRecords.length > 0) {
+      for (let i = currentMoveIndex; i >= 0; i--) {
+        if (realRecords[i]?.side === 'white' && realRecords[i]?.time_remaining != null) {
+          return Math.round(realRecords[i].time_remaining);
+        }
+      }
+    }
     const whiteMovesCount = Math.floor((currentMoveIndex + 2) / 2);
     return Math.max(35, 600 - whiteMovesCount * 14);
   });
 
   let themTime = $derived.by(() => {
     if (currentMoveIndex < 1) return 600;
+    if (realRecords.length > 0) {
+      for (let i = currentMoveIndex; i >= 0; i--) {
+        if (realRecords[i]?.side === 'black' && realRecords[i]?.time_remaining != null) {
+          return Math.round(realRecords[i].time_remaining);
+        }
+      }
+    }
     const blackMovesCount = Math.floor((currentMoveIndex + 1) / 2);
     return Math.max(18, 600 - blackMovesCount * 16);
   });
@@ -113,158 +129,30 @@
   }
 
   // Game Commentary state (reactive based on current game ply)
-  interface CommentaryMoment {
-    phase: string;
-    headline: string;
-    text: string;
-    isPivotal?: boolean;
-    pivotalLabel?: string;
-    pivotalId?: string;
-  }
-
   let lastAcknowledgedPivotalId = $state<string | null>(null);
 
   const gameCommentary = $derived.by<CommentaryMoment>(() => {
-    if (currentMoveIndex < 0) {
+    if (backendError) {
       return {
-        phase: 'Game Setup',
-        headline: 'Opera Game: Morphy vs. Allies (1858)',
-        text: "Paul Morphy takes White against Duke Karl of Brunswick and Count Isouard in Paris. White begins with classical King's Pawn development."
-      };
-    }
-    const ply = currentMoveIndex;
-    if (ply <= 1) {
-      return {
-        phase: 'Opening',
-        headline: 'Open Game Initiative',
-        text: "Both sides contest the center immediately with 1.e4 e5, fighting for central control and opening avenues for bishops and queens."
-      };
-    }
-    if (ply <= 3) {
-      return {
-        phase: 'Opening',
-        headline: 'Philidor Defense',
-        text: "Black adopts the Philidor Defense (2...d6). While solid, it restricts Black's dark-squared bishop and concedes spatial freedom to White."
-      };
-    }
-    if (ply <= 5) {
-      return {
-        phase: 'Opening',
-        headline: 'Center Break & Early Pin',
-        text: "Morphy strikes the center with 3.d4. Black attempts to pin the knight with 3...Bg4, but White prepares to seize tempo and open lines."
-      };
-    }
-    if (ply <= 7) {
-      return {
-        phase: 'Opening',
-        headline: 'Conceding the Bishop Pair',
-        text: "Black surrenders the light-squared bishop (4...Bxf3 5.Qxf3). White regains the piece with queen centralization and opens diagonal attacking avenues."
-      };
-    }
-    if (ply <= 9) {
-      return {
-        phase: 'Development',
-        headline: 'Rapid White Mobilization',
-        text: "With 5...dxe5, the center opens up. Morphy now has open diagonals for both bishops and a centralized queen ready to launch attacking threats."
-      };
-    }
-    if (ply <= 11) {
-      return {
-        phase: 'Attack',
-        headline: 'Pressure on f7',
-        text: "Morphy plays 6.Bc4, taking aim at Black's sensitive f7 weak point. Black blocks with 6...Nf6, but White's tactical pressure is mounting."
-      };
-    }
-    if (ply <= 13) {
-      return {
-        phase: 'Attack',
-        headline: 'Dual Threats (f7 & b7)',
-        text: "7.Qb3 creates simultaneous mating threats on f7 and material threats on b7. Black defends f7 with 7...Qe7, falling further behind in piece development."
-      };
-    }
-    if (ply <= 15) {
-      return {
-        phase: 'Development',
-        headline: 'Relentless Piece Mobilization',
-        text: "Morphy develops 8.Nc3, ignoring the pawn grab on b7 to prioritize total piece mobilization. Black plays 8...c6 to blunt the diagonal."
-      };
-    }
-    if (ply <= 17) {
-      return {
-        phase: 'Critical Moment',
-        headline: 'The Pin & The Counter-Thrust',
-        text: "Morphy pins Black's knight with 9.Bg5. Black lashes out with 9...b5? attempting to kick the bishop, but fatally neglects king safety in the center.",
+        phase: 'Error',
+        headline: 'Model Missing',
+        text: backendError,
         isPivotal: true,
-        pivotalLabel: 'Blunder',
-        pivotalId: 'move-9-blunder'
+        pivotalLabel: 'Error'
       };
     }
-    if (ply <= 19) {
-      return {
-        phase: 'Positional Sacrifice',
-        headline: '10.Nxb5! Stripping the King',
-        text: "Brilliant knight sacrifice! Morphy trades a knight for two pawns with 10.Nxb5! cxb5 to blow open files directly toward Black's uncastled monarch.",
-        isPivotal: true,
-        pivotalLabel: 'Piece Sac',
-        pivotalId: 'move-10-sacrifice'
-      };
+    if (realCommentary.length > 0) {
+      if (currentMoveIndex < 0) {
+        return realCommentary[0] || analysisData.getCommentary(-1);
+      }
+      const targetIdx = currentMoveIndex + 1;
+      if (realCommentary[targetIdx]) {
+        return realCommentary[targetIdx];
+      }
+      const matched = realCommentary.find((c) => (c as any).ply === currentMoveIndex);
+      if (matched) return matched;
     }
-    if (ply <= 21) {
-      return {
-        phase: 'Tactical Pin',
-        headline: 'Paralysis on the d-file',
-        text: "11.Bxb5+ delivers check and forces Black into an agonizing pin with 11...Nbd7. Black's pieces are immobilized and tripping over each other."
-      };
-    }
-    if (ply <= 23) {
-      return {
-        phase: 'Attack',
-        headline: 'Queenside Castling with Tempo',
-        text: "Morphy castles queenside (0-0-0)! In classical chess, castling activates the rook directly onto the open d-file with crushing pressure against d7."
-      };
-    }
-    if (ply <= 25) {
-      return {
-        phase: 'Exchange Sacrifice',
-        headline: '13.Rxd7! Shattering the Defense',
-        text: "Morphy gives up a rook for a knight to eliminate Black's key defender. Black is forced to recapture 13...Rxd7, remaining pinned and helpless.",
-        isPivotal: true,
-        pivotalLabel: 'Rook Sac',
-        pivotalId: 'move-13-exchange'
-      };
-    }
-    if (ply <= 27) {
-      return {
-        phase: 'Attack',
-        headline: 'Complete Piece Harmony',
-        text: "14.Rd1 brings White's last remaining piece into the assault. All of Morphy's active pieces are participating while Black's kingside pieces remain asleep."
-      };
-    }
-    if (ply <= 29) {
-      return {
-        phase: 'Decisive Strike',
-        headline: 'Defenders Eliminated',
-        text: "15.Bxd7+ simplifies into an irresistible mating net. Black's knight recaptures on d7, leaving Black's king with zero escape squares."
-      };
-    }
-    if (ply <= 31) {
-      return {
-        phase: 'Queen Sacrifice',
-        headline: '16.Qb8+!! The Immortal Deflection',
-        text: "A legendary queen sacrifice! Morphy plays 16.Qb8+!, forcing 16...Nxb8 and deflecting Black's knight from covering d8.",
-        isPivotal: true,
-        pivotalLabel: 'Queen Sac',
-        pivotalId: 'move-16-queen-sac'
-      };
-    }
-    return {
-      phase: 'Checkmate',
-      headline: '17.Rd8# Immortal Checkmate!',
-      text: "Checkmate! The d-file rook delivers the fatal blow, protected by the bishop on g5. A masterpiece of development, tempo, and piece coordination.",
-      isPivotal: true,
-      pivotalLabel: 'Checkmate',
-      pivotalId: 'move-17-checkmate'
-    };
+    return analysisData.getCommentary(currentMoveIndex);
   });
 
   // Move handling
@@ -273,6 +161,7 @@
     currentFen = chess.fen();
     moveHistory = chess.history();
     currentMoveIndex = moveHistory.length - 1;
+    console.log(currentFen);
   }
 
   // Controls mode: 'buttons' (play, forward, backward) vs 'slider' (scrubber)
@@ -482,8 +371,8 @@
         moveNumber: moveNum,
         color: isWhite ? 'White' : 'Black',
         san: samplePgnMoves[i] || '',
-        yourOdds: val,
-        theirOdds: 100 - val,
+        yourOdds: Math.round(val * 10) / 10,
+        theirOdds: Math.round((100 - val) * 10) / 10,
         timeRemaining: formatTime(timeSec),
         x,
         y
@@ -554,6 +443,13 @@
             <span>Replay</span>
           </button>
         </div>
+
+        {#if backendError}
+          <div class="backend_error_banner" role="alert">
+            <span class="error_icon">⚠️</span>
+            <span>{backendError}</span>
+          </div>
+        {/if}
 
         <!-- EXPANDED ANALYSIS VIEW (expanded_analysis_page.png) -->
         <div class="expanded_grid">
@@ -690,11 +586,11 @@
               aria-label="Open odds progression graph modal"
             >
               <div class="capsule_half black_half">
-                <span class="odds_percent">{yourOdds}%</span>
+                <span class="odds_percent">{formatOdds(yourOdds)}%</span>
                 <span class="odds_label">Your Odds</span>
               </div>
               <div class="capsule_half gray_half">
-                <span class="odds_percent">{theirOdds}%</span>
+                <span class="odds_percent">{formatOdds(theirOdds)}%</span>
                 <span class="odds_label">Their Odds</span>
               </div>
             </div>
@@ -782,19 +678,21 @@
           <div class="player_info_card top_player">
             <h2 class="player_display_name">{currentGame.opponent}</h2>
             <div class="player_stats_row">
-              <span class="stat_badge">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="#38a169">
-                  <path d="M12 2a3.5 3.5 0 0 0-3.5 3.5c0 1.25.66 2.34 1.63 2.94C8.75 9.28 8 10.74 8 12.5c0 .35.03.69.09 1.02C7.3 13.9 6.78 14.61 6.78 15.45c0 1.13.92 2.05 2.05 2.05h6.34c1.13 0 2.05-.92 2.05-2.05 0-.84-.52-1.55-1.31-1.93.06-.33.09-.67.09-1.02 0-1.76-.75-3.22-2.13-4.06.97-.6 1.63-1.69 1.63-2.94A3.5 3.5 0 0 0 12 2zm-5 18a1 1 0 0 0-1 1v1h12v-1a1 1 0 0 0-1-1H7z"/>
-                </svg>
-                1600
-              </span>
-              <span class="stat_badge">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="12" cy="12" r="9"/>
-                  <polyline points="12 6 12 12 16 14"/>
-                </svg>
-                1600
-              </span>
+              {#if currentGame.opponent_elo != null}
+                <span class="stat_badge" title="Opponent Elo Rating">
+                  <img src="/chess_icon.svg" alt="Chess.com" class="rating_chess_logo" />
+                  {currentGame.opponent_elo}
+                </span>
+              {/if}
+              {#if currentGame.time_control}
+                <span class="stat_badge" title="Time Control">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="9"/>
+                    <polyline points="12 6 12 12 16 14"/>
+                  </svg>
+                  {Math.floor(parseInt(currentGame.time_control) / 60)} min
+                </span>
+              {/if}
             </div>
           </div>
 
@@ -811,21 +709,23 @@
           </div>
 
           <div class="player_info_card bottom_player">
-            <h2 class="player_display_name">Saaketh Kesireddy</h2>
+            <h2 class="player_display_name">You</h2>
             <div class="player_stats_row">
-              <span class="stat_badge">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="#38a169">
-                  <path d="M12 2a3.5 3.5 0 0 0-3.5 3.5c0 1.25.66 2.34 1.63 2.94C8.75 9.28 8 10.74 8 12.5c0 .35.03.69.09 1.02C7.3 13.9 6.78 14.61 6.78 15.45c0 1.13.92 2.05 2.05 2.05h6.34c1.13 0 2.05-.92 2.05-2.05 0-.84-.52-1.55-1.31-1.93.06-.33.09-.67.09-1.02 0-1.76-.75-3.22-2.13-4.06.97-.6 1.63-1.69 1.63-2.94A3.5 3.5 0 0 0 12 2zm-5 18a1 1 0 0 0-1 1v1h12v-1a1 1 0 0 0-1-1H7z"/>
-                </svg>
-                1600
-              </span>
-              <span class="stat_badge">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="12" cy="12" r="9"/>
-                  <polyline points="12 6 12 12 16 14"/>
-                </svg>
-                1600
-              </span>
+              {#if currentGame.player_elo != null}
+                <span class="stat_badge" title="Your Elo Rating">
+                  <img src="/chess_icon.svg" alt="Chess.com" class="rating_chess_logo" />
+                  {currentGame.player_elo}
+                </span>
+              {/if}
+              {#if currentGame.time_control}
+                <span class="stat_badge" title="Time Control">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="9"/>
+                    <polyline points="12 6 12 12 16 14"/>
+                  </svg>
+                  {Math.floor(parseInt(currentGame.time_control) / 60)} min
+                </span>
+              {/if}
             </div>
           </div>
         </div>
@@ -1042,12 +942,12 @@
               <div class="hud_divider"></div>
               <div class="hud_item">
                 <span class="hud_label">Your Odds</span>
-                <span class="hud_value your_val">{activeInspectPoint.yourOdds}%</span>
+                <span class="hud_value your_val">{formatOdds(activeInspectPoint.yourOdds)}%</span>
               </div>
               <div class="hud_divider"></div>
               <div class="hud_item">
                 <span class="hud_label">Their Odds</span>
-                <span class="hud_value their_val">{activeInspectPoint.theirOdds}%</span>
+                <span class="hud_value their_val">{formatOdds(activeInspectPoint.theirOdds)}%</span>
               </div>
               <div class="hud_divider"></div>
               <div class="hud_item">
@@ -1117,7 +1017,7 @@
                   class="point_interactive_group"
                   role="button"
                   tabindex="0"
-                  aria-label="Move {pt.moveNumber} {pt.color}: {pt.yourOdds}% win odds"
+                  aria-label="Move {pt.moveNumber} {pt.color}: {formatOdds(pt.yourOdds)}% win odds"
                   onmouseenter={() => (hoveredPointIndex = idx)}
                   onmouseleave={() => (hoveredPointIndex = null)}
                   onfocus={() => (hoveredPointIndex = idx)}
@@ -1208,6 +1108,25 @@
     transition: transform 0.15s ease, opacity 0.15s ease;
   }
 
+  .backend_error_banner {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    padding: 0.85rem 1.15rem;
+    background: #fef2f2;
+    border: 1.5px solid #ef4444;
+    color: #991b1b;
+    border-radius: 14px;
+    font-size: 13.5px;
+    font-weight: 600;
+    margin-bottom: 0.85rem;
+  }
+
+  .backend_error_banner .error_icon {
+    font-size: 16px;
+    flex-shrink: 0;
+  }
+
   .mode_toggle_pill:hover {
     transform: translateY(-2px);
     opacity: 0.92;
@@ -1261,16 +1180,7 @@
   }
 
 
-  @keyframes pivotalBadgeGlow {
-    0% {
-      transform: scale(0.98);
-      box-shadow: 0 0 3px rgba(0, 0, 0, 0.4);
-    }
-    100% {
-      transform: scale(1.04);
-      box-shadow: 0 0 8px rgba(0, 0, 0, 0.7);
-    }
-  }
+
 
   /* Main Workspace */
   .analysis_workspace {
@@ -1606,13 +1516,16 @@
     font-size: 11px;
     font-weight: 800;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
-    background: linear-gradient(135deg, #e8590c, #f76707);
+    letter-spacing: 0.05em;
+    background: #ec5d0b;
     color: #ffffff;
-    padding: 0.22rem 0.65rem;
-    border-radius: 999px;
-    box-shadow: 0 1px 4px rgba(232, 89, 12, 0.35);
-    animation: pivotalBadgeGlow 1.6s infinite alternate ease-in-out;
+    padding: 0.25rem 0.75rem;
+    border-radius: 9999px;
+    box-shadow: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    line-height: 1.2;
   }
 
   .commentary_header {
@@ -1776,6 +1689,14 @@
     font-size: 15px;
     font-weight: 700;
     color: #000000;
+  }
+
+  .rating_chess_logo {
+    width: 17px;
+    height: 17px;
+    object-fit: contain;
+    border-radius: 4px;
+    display: inline-block;
   }
 
   .restart_pill_btn {
