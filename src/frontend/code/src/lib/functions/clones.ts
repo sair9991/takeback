@@ -87,6 +87,8 @@ export interface PredictStateRequest {
   my_clock: number;
   opponent_clock: number;
   opponent_username?: string;
+  opponent_elo?: number;
+  my_elo?: number;
 }
 
 export interface PredictStateResponse {

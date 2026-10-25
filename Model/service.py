@@ -29,9 +29,18 @@ import torch.nn.functional as F
 
 ROOT = Path(__file__).resolve().parent.parent
 MODEL_DIR = ROOT / "Model"
-for p in (str(ROOT / "maia3"), str(ROOT), str(MODEL_DIR)):
+maia3_dir = ROOT / "maia3"
+
+if str(maia3_dir) in sys.path:
+    sys.path.remove(str(maia3_dir))
+sys.path.insert(0, str(maia3_dir))
+
+for p in (str(MODEL_DIR), str(ROOT)):
     if p not in sys.path:
-        sys.path.insert(0, p)
+        sys.path.append(p)
+
+if "maia3" in sys.modules and not getattr(sys.modules["maia3"], "__file__", None):
+    del sys.modules["maia3"]
 
 from Model.snapshots import (
     CLK_RE,

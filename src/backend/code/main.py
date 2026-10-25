@@ -1,7 +1,7 @@
 import asyncio
 import json
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 try:
@@ -52,23 +52,33 @@ def get_game_detail(game_id: str):
         "SELECT ply, side, move, time_remaining, clock_str FROM moves WHERE game_id = ? ORDER BY ply ASC",
         (actual_gid,),
     )
+    odds = []
+    eval_error = None
     try:
         odds = evaluator.cache_game_odds(actual_gid, game.get("player_id"))
-    except RuntimeError as e:
-        raise HTTPException(500, detail=str(e))
+    except Exception as e:
+        eval_error = str(e)
 
+    commentary = []
+    narrative = ""
+    tags = []
+    gemma_error = None
     try:
-        commentary, narrative = gemma_service.cache_game_commentary_and_narrative(actual_gid, game.get("player_id"))
+        c, n = gemma_service.cache_game_commentary_and_narrative(actual_gid, game.get("player_id"))
+        commentary = c
+        narrative = n.get("narrative", "") if isinstance(n, dict) else str(n)
+        tags = n.get("tags", []) if isinstance(n, dict) else []
     except RuntimeError as e:
-        raise HTTPException(500, detail=str(e))
+        gemma_error = str(e)
 
     return {
         **helper.format_game(game),
         "moves": moves,
         "odds": odds,
         "commentary": commentary,
-        "narrative": narrative.get("narrative", "") if isinstance(narrative, dict) else str(narrative),
-        "tags": narrative.get("tags", []) if isinstance(narrative, dict) else [],
+        "narrative": narrative,
+        "tags": tags,
+        "error": gemma_error or eval_error,
     }
 
 
@@ -137,14 +147,14 @@ def get_analyzed_games(username: str, limit: int = 50, offset: int = 0):
 
 
 @app.post("/api/users/{username}/analyze/{game_id}")
-def analyze_game(username: str, game_id: str, opponent: str = None):
+def analyze_game(username: str, game_id: str, background_tasks: BackgroundTasks, opponent: str = None):
     game = helper.query_one("SELECT opponent_username FROM games WHERE game_id = ? OR id = ?", (game_id, game_id))
     opp = (game.get("opponent_username") if game else None) or opponent or "Opponent"
 
     if queue_manager.is_cached(opp):
         helper.execute("INSERT OR IGNORE INTO analyzed_games (user_id, game_id) VALUES (?, ?)", (username, game_id))
-        asyncio.create_task(asyncio.to_thread(evaluator.cache_game_odds, game_id, username))
-        asyncio.create_task(asyncio.to_thread(gemma_service.cache_game_commentary_and_narrative, game_id, username))
+        background_tasks.add_task(evaluator.cache_game_odds, game_id, username)
+        background_tasks.add_task(gemma_service.cache_game_commentary_and_narrative, game_id, username)
         return {"cached": True, "status": "ready", "opponent": opp}
 
     job_id = queue_manager.enqueue(opp, username, game_id)
@@ -200,6 +210,8 @@ def predict_next_state(payload: clone_service.PredictStateRequest):
             my_clock=payload.my_clock,
             opponent_clock=payload.opponent_clock,
             opponent_username=payload.opponent_username,
+            opponent_elo=payload.opponent_elo,
+            my_elo=payload.my_elo,
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

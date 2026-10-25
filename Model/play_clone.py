@@ -8,9 +8,17 @@ from pathlib import Path
 
 MODEL_DIR = Path(__file__).resolve().parent
 ROOT = MODEL_DIR.parent
-for p in (str(ROOT / "maia3"), str(ROOT), str(MODEL_DIR)):
+maia3_dir = ROOT / "maia3"
+if str(maia3_dir) in sys.path:
+    sys.path.remove(str(maia3_dir))
+sys.path.insert(0, str(maia3_dir))
+
+for p in (str(MODEL_DIR), str(ROOT)):
     if p not in sys.path:
-        sys.path.insert(0, p)
+        sys.path.append(p)
+
+if "maia3" in sys.modules and not getattr(sys.modules["maia3"], "__file__", None):
+    del sys.modules["maia3"]
 
 import chess
 import torch
@@ -36,8 +44,10 @@ if local_ckpt:
 cfg = parse_args(uci_args)
 engine = Maia3UCIEngine(cfg)
 clone = Clone()
-clone.load_state_dict(torch.load(Path(__file__).with_name("clone.pt"), map_location="cpu", weights_only=True))
-clone.eval()
+clone_pt = Path(__file__).with_name("clone.pt")
+if clone_pt.is_file():
+    clone.load_state_dict(torch.load(clone_pt, map_location="cpu", weights_only=True))
+    clone.eval()
 
 def ask_color():
     while True:
@@ -172,33 +182,38 @@ def clone_move(board, elo, clocks, opp_last, think_times):
     print(f"Clone plays {san}")
     show_board(board)
 
-user_color = ask_color()
-elo = ask_elo()
-board = chess.Board()
-clocks = {chess.WHITE: 600.0, chess.BLACK: 600.0}
-think_times, opp_last = [], 0.0
-show_board(board)
+def play():
+    user_color = ask_color()
+    elo = ask_elo()
+    board = chess.Board()
+    clocks = {chess.WHITE: 600.0, chess.BLACK: 600.0}
+    think_times, opp_last = [], 0.0
+    show_board(board)
 
-if user_color == chess.BLACK and not board.is_game_over():
-    clone_move(board, elo, clocks, opp_last, think_times)
+    if user_color == chess.BLACK and not board.is_game_over():
+        clone_move(board, elo, clocks, opp_last, think_times)
 
-while not board.is_game_over():
-    started = time.time()
-    raw = input("Your move (or quit): ").strip()
-    opp_last = time.time() - started
-    if raw.lower() in ("quit", "q", "exit"):
-        break
-    try:
-        board.push_san(raw)
-    except ValueError:
-        print("Illegal move. Use chess notation such as e4, Nf3, or O-O.")
-        continue
+    while not board.is_game_over():
+        started = time.time()
+        raw = input("Your move (or quit): ").strip()
+        opp_last = time.time() - started
+        if raw.lower() in ("quit", "q", "exit"):
+            break
+        try:
+            board.push_san(raw)
+        except ValueError:
+            print("Illegal move. Use chess notation such as e4, Nf3, or O-O.")
+            continue
 
-    if board.is_game_over():
-        show_board(board)
-        print(f"Game over: {board.result()}")
-        break
+        if board.is_game_over():
+            show_board(board)
+            print(f"Game over: {board.result()}")
+            break
 
-    clone_move(board, elo, clocks, opp_last, think_times)
+        clone_move(board, elo, clocks, opp_last, think_times)
+
+
+if __name__ == "__main__":
+    play()
     if board.is_game_over():
         print(f"Game over: {board.result()}")

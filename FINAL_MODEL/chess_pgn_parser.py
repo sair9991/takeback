@@ -41,7 +41,10 @@ for p in (str(ROOT), str(DIR)):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from src.backend.database import Database
+try:
+    from src.backend.database import Database
+except ImportError:
+    Database = None
 
 HEADERS = {
     "User-Agent": "chess-pgn-downloader/1.0 (username: your_username; contact: you@example.com)"

@@ -4,6 +4,7 @@
   import { Chess } from 'chess.js';
   import Chessboard from '../../../../lib/components/Chessboard.svelte';
   import { getGameAnalysis, fetchGameDetail, fetchGameMoves, type CommentaryMoment, type MoveRecord } from '../../../../lib/functions/gameAnalysis';
+  import { requestCloneMove } from '../../../../lib/functions/clones';
   import type { Game } from '../../../../lib/types/game';
 
   const gameId = $derived(page.params.id);
@@ -29,6 +30,16 @@
       }
       if (detail.game) {
         activeGame = detail.game;
+      } else {
+        // Fallback: search user's games from backend
+        try {
+          const { fetchUserGames } = await import('../../../../lib/functions/userGames');
+          const allUserGames = await fetchUserGames();
+          const matched = allUserGames.find((g) => g.id === gameId || String(g.id) === String(gameId));
+          if (matched) activeGame = matched;
+        } catch (e) {
+          console.warn('Fallback game lookup failed:', e);
+        }
       }
       if (detail.moves.length > 0) {
         realMoves = detail.moves;
@@ -123,9 +134,159 @@
   });
 
   function formatTime(seconds: number): string {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
+    const totalSecs = Math.max(0, Math.round(seconds));
+    const mins = Math.floor(totalSecs / 60);
+    const secs = totalSecs % 60;
     return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+  }
+
+  // Interactive Replay against Clone state
+  let replayYouTime = $state<number | null>(null);
+  let replayThemTime = $state<number | null>(null);
+  let isCloneThinking = $state(false);
+  let replayTimerInterval: ReturnType<typeof setInterval> | null = null;
+
+  function startReplayClock() {
+    stopReplayClock();
+    replayTimerInterval = setInterval(() => {
+      if (viewMode !== 'focused' || chess.isGameOver()) {
+        stopReplayClock();
+        return;
+      }
+
+      if (isOpponentTurn || isCloneThinking) {
+        // Opponent's turn: tick opponent's clock down
+        if (replayThemTime != null && replayThemTime > 0) {
+          replayThemTime = Math.max(0, replayThemTime - 1);
+        }
+      } else {
+        // Player's turn: tick player's clock down second by second
+        if (replayYouTime != null && replayYouTime > 0) {
+          replayYouTime = Math.max(0, replayYouTime - 1);
+        }
+      }
+    }, 1000);
+  }
+
+  function stopReplayClock() {
+    if (replayTimerInterval) {
+      clearInterval(replayTimerInterval);
+      replayTimerInterval = null;
+    }
+  }
+
+  const playerColor = $derived.by<'white' | 'black'>(() => {
+    const raw = (currentGame.player_color || 'white').toLowerCase().trim();
+    return raw === 'black' ? 'black' : 'white';
+  });
+  const opponentColor = $derived<'white' | 'black'>(playerColor === 'white' ? 'black' : 'white');
+
+  // Reactive check using currentFen ($state) to ensure Svelte 5 triggers on every move
+  const isOpponentTurn = $derived.by(() => {
+    const turn = currentFen.split(' ')[1] || 'w';
+    return (turn === 'w' && playerColor === 'black') ||
+           (turn === 'b' && playerColor === 'white');
+  });
+
+  const currentYouTime = $derived(replayYouTime ?? youTime);
+  const currentThemTime = $derived(replayThemTime ?? themTime);
+
+  async function triggerCloneMove() {
+    if (isCloneThinking || chess.isGameOver()) return;
+    const turn = currentFen.split(' ')[1] || 'w';
+    const isTheirTurn = (turn === 'w' && playerColor === 'black') || (turn === 'b' && playerColor === 'white');
+    if (!isTheirTurn) return;
+
+    isCloneThinking = true;
+    startReplayClock();
+    const thinkStart = Date.now();
+
+    try {
+      const oppColor = playerColor === 'white' ? 'black' : 'white';
+      const oppName = currentGame.opponent && currentGame.opponent !== 'Opponent Name'
+        ? currentGame.opponent
+        : 'kovinar';
+
+      const res = await requestCloneMove({
+        fen: currentFen,
+        opponent_color: oppColor,
+        my_clock: currentYouTime,
+        opponent_clock: currentThemTime,
+        opponent_username: oppName,
+        opponent_elo: currentGame.opponent_elo,
+        my_elo: currentGame.player_elo,
+      });
+
+      // Artificial Delay: simulate realistic human think time like a real clock in replay
+      const predictedSeconds = typeof res?.think_time === 'number' && res.think_time > 0
+        ? res.think_time
+        : 2.2;
+      const targetDelayMs = Math.min(Math.max(predictedSeconds * 1000, 1400), 5500);
+      const elapsedMs = Date.now() - thinkStart;
+      const remainingDelay = Math.max(0, targetDelayMs - elapsedMs);
+
+      if (remainingDelay > 0) {
+        await new Promise((resolve) => setTimeout(resolve, remainingDelay));
+      }
+
+      if (res && (res.san || res.move || res.uci)) {
+        const moveText = res.san || res.move;
+        let moved = false;
+        if (moveText) {
+          try {
+            chess.move(moveText);
+            moved = true;
+          } catch {
+            moved = false;
+          }
+        }
+        if (!moved && res.uci && res.uci.length >= 4) {
+          try {
+            chess.move({
+              from: res.uci.slice(0, 2) as any,
+              to: res.uci.slice(2, 4) as any,
+              promotion: (res.uci[4] || 'q') as any,
+            });
+            moved = true;
+          } catch {}
+        }
+
+        if (moved) {
+          currentFen = chess.fen();
+          moveHistory = chess.history();
+          currentMoveIndex = moveHistory.length - 1;
+        }
+
+        if (res.opponent_clock != null) {
+          replayThemTime = res.opponent_clock;
+        }
+      }
+    } catch (err) {
+      console.error('Clone move prediction failed:', err);
+    } finally {
+      isCloneThinking = false;
+    }
+  }
+
+  function startReplayMode() {
+    stopAutoPlay();
+    viewMode = 'focused';
+    replayYouTime = youTime;
+    replayThemTime = themTime;
+    startReplayClock();
+
+    // If entering replay mode and it is the opponent's turn, trigger clone move!
+    setTimeout(() => {
+      triggerCloneMove();
+    }, 350);
+  }
+
+  function exitReplayMode() {
+    stopReplayClock();
+    viewMode = 'expanded';
+    replayYouTime = null;
+    replayThemTime = null;
+    isCloneThinking = false;
   }
 
   // Game Commentary state (reactive based on current game ply)
@@ -157,11 +318,20 @@
 
   // Move handling
   function handleMove(move: { from: string; to: string; san: string }) {
+    if (viewMode === 'focused' && (isOpponentTurn || isCloneThinking)) {
+      return;
+    }
     chess.move(move.san);
     currentFen = chess.fen();
     moveHistory = chess.history();
     currentMoveIndex = moveHistory.length - 1;
-    console.log(currentFen);
+
+    // In replay mode, trigger clone move response right after user move!
+    if (viewMode === 'focused') {
+      setTimeout(() => {
+        triggerCloneMove();
+      }, 250);
+    }
   }
 
   // Controls mode: 'buttons' (play, forward, backward) vs 'slider' (scrubber)
@@ -259,11 +429,15 @@
 
   function restartGame() {
     stopAutoPlay();
+    stopReplayClock();
     lastAcknowledgedPivotalId = null;
     chess.reset();
     currentFen = chess.fen();
     moveHistory = [];
     currentMoveIndex = -1;
+    replayYouTime = null;
+    replayThemTime = null;
+    isCloneThinking = false;
   }
 
   // Moves Modal state and logic
@@ -409,6 +583,7 @@
 
   onDestroy(() => {
     stopAutoPlay();
+    stopReplayClock();
   });
 </script>
 
@@ -417,7 +592,13 @@
   <main class="analysis_workspace {viewMode === 'focused' ? 'focused_workspace' : ''}">
     <!-- Left Column: Interactive Chessboard -->
     <section class="board_section">
-      <Chessboard fen={currentFen} onmove={handleMove} {viewMode} />
+      <Chessboard
+        fen={currentFen}
+        onmove={handleMove}
+        {viewMode}
+        orientation={playerColor}
+        interactive={!isCloneThinking && (viewMode !== 'focused' || !isOpponentTurn)}
+      />
     </section>
 
     <!-- Right Column: Interactive Widgets -->
@@ -427,7 +608,7 @@
         <div class="widgets_header">
           <button
             class="mode_toggle_pill {gameCommentary.isPivotal ? 'pivotal_highlight' : ''}"
-            onclick={() => (viewMode = 'focused')}
+            onclick={startReplayMode}
             title={gameCommentary.isPivotal ? 'Pivotal Moment reached! Click to view in Replay mode' : 'Switch to Replay mode'}
             aria-label={gameCommentary.isPivotal ? 'Pivotal Moment reached! Click to view in Replay mode' : 'Switch to Replay mode'}
           >
@@ -675,8 +856,13 @@
       {:else}
         <!-- FOCUSED ANALYSIS VIEW (focused_analysis_page.png) -->
         <div class="focused_container">
-          <div class="player_info_card top_player">
-            <h2 class="player_display_name">{currentGame.opponent}</h2>
+          <div class="player_info_card top_player {isCloneThinking ? 'is_thinking' : ''}">
+            <h2 class="player_display_name">
+              {currentGame.opponent}
+              {#if isCloneThinking}
+                <span class="thinking_badge">Thinking...</span>
+              {/if}
+            </h2>
             <div class="player_stats_row">
               {#if currentGame.opponent_elo != null}
                 <span class="stat_badge" title="Opponent Elo Rating">
@@ -693,6 +879,9 @@
                   {Math.floor(parseInt(currentGame.time_control) / 60)} min
                 </span>
               {/if}
+              <span class="stat_badge color_badge" title="{opponentColor === 'white' ? 'Playing White' : 'Playing Black'}">
+                {opponentColor === 'white' ? '⚪ White' : '⚫ Black'}
+              </span>
             </div>
           </div>
 
@@ -700,10 +889,10 @@
           <div class="focused_clock_section">
             <div class="split_capsule clock_capsule focused_clock_capsule">
               <div class="capsule_half black_half">
-                <span class="clock_digits">{formatTime(youTime)}</span>
+                <span class="clock_digits">{formatTime(currentYouTime)}</span>
               </div>
               <div class="capsule_half gray_half">
-                <span class="clock_digits">{formatTime(themTime)}</span>
+                <span class="clock_digits">{formatTime(currentThemTime)}</span>
               </div>
             </div>
           </div>
@@ -726,6 +915,9 @@
                   {Math.floor(parseInt(currentGame.time_control) / 60)} min
                 </span>
               {/if}
+              <span class="stat_badge color_badge" title="{playerColor === 'white' ? 'Playing White' : 'Playing Black'}">
+                {playerColor === 'white' ? '⚪ White' : '⚫ Black'}
+              </span>
             </div>
           </div>
         </div>
@@ -736,7 +928,7 @@
   {#if viewMode === 'focused'}
     <!-- Restart button in bottom right corner (matching focused_analysis_page.png) -->
     <div class="focused_bottom_bar">
-      <button class="restart_pill_btn" onclick={() => { restartGame(); viewMode = 'expanded'; }}>
+      <button class="restart_pill_btn" onclick={() => { restartGame(); exitReplayMode(); }}>
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
           <polyline points="1 4 1 10 7 10"></polyline>
           <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
@@ -1125,6 +1317,26 @@
   .backend_error_banner .error_icon {
     font-size: 16px;
     flex-shrink: 0;
+  }
+
+  .thinking_badge {
+    display: inline-flex;
+    align-items: center;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--accent-1, #e8590c);
+    background: rgba(232, 89, 12, 0.12);
+    border: 1px solid rgba(232, 89, 12, 0.3);
+    padding: 2px 8px;
+    border-radius: 8px;
+    margin-left: 10px;
+    vertical-align: middle;
+    animation: thinkingPulse 1.4s ease-in-out infinite alternate;
+  }
+
+  @keyframes thinkingPulse {
+    0% { opacity: 0.6; transform: scale(0.97); }
+    100% { opacity: 1; transform: scale(1.02); }
   }
 
   .mode_toggle_pill:hover {

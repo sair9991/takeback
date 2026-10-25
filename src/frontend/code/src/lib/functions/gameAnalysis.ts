@@ -254,14 +254,15 @@ export async function fetchGameDetail(
     const res = await fetch(`${API_BASE}/api/games/${gameId}`);
     if (res.ok) {
       const data = await res.json();
-      const { moves, odds, commentary, narrative, ...gameData } = data;
+      const { moves, odds, commentary, narrative, error: gemmaError, ...gameData } = data;
       return {
         game: gameData as Game,
         moves: Array.isArray(moves) ? moves.map((m: any) => m.move) : [],
         records: Array.isArray(moves) ? moves : [],
         odds: Array.isArray(odds) ? odds : [],
         commentary: Array.isArray(commentary) ? commentary : [],
-        narrative: typeof narrative === 'string' ? narrative : ''
+        narrative: typeof narrative === 'string' ? narrative : '',
+        error: gemmaError || undefined
       };
     } else {
       const err = await res.json().catch(() => ({}));

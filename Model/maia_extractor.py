@@ -34,9 +34,16 @@ import torch.nn.functional as F
 
 MODEL_DIR = Path(__file__).resolve().parent
 ROOT = MODEL_DIR.parent
-for _path in (str(ROOT / "maia3"), str(ROOT), str(MODEL_DIR)):
+maia3_dir = ROOT / "maia3"
+if str(maia3_dir) in sys.path:
+    sys.path.remove(str(maia3_dir))
+sys.path.insert(0, str(maia3_dir))
+for _path in (str(MODEL_DIR), str(ROOT)):
     if _path not in sys.path:
-        sys.path.insert(0, _path)
+        sys.path.append(_path)
+
+if "maia3" in sys.modules and not getattr(sys.modules["maia3"], "__file__", None):
+    del sys.modules["maia3"]
 
 from maia3.dataset import get_historical_tokens, tokenize_board
 from maia3.model_registry import apply_model_config, resolve_checkpoint_path, resolve_model_spec

@@ -12,7 +12,10 @@ from maia_extractor import run as extract
 from implementation import train
 from play_clone import play
 from chess_pgn_parser import fetch_user_games_and_save
-from src.backend.database import Database
+try:
+    from src.backend.database import Database
+except ImportError:
+    Database = None
 
 if __name__ == "__main__":
     db = Database()

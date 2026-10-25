@@ -46,15 +46,24 @@ from typing import Any, Optional
 import chess
 import torch
 
-# Ensure ROOT and FINAL_MODEL directories are in sys.path
+# Ensure ROOT and Model directories are in sys.path
 ROOT = Path(__file__).resolve().parent.parent.parent
-FINAL_MODEL_DIR = ROOT / "FINAL_MODEL"
-for p in (str(ROOT / "maia3"), str(ROOT), str(FINAL_MODEL_DIR)):
-    if p not in sys.path:
-        sys.path.insert(0, p)
+MODEL_DIR = ROOT / "Model"
+maia3_dir = ROOT / "maia3"
 
-from FINAL_MODEL.implementation import Clone, S
-from FINAL_MODEL.play_clone import PIECE_TYPES, VALUES, features
+if str(maia3_dir) in sys.path:
+    sys.path.remove(str(maia3_dir))
+sys.path.insert(0, str(maia3_dir))
+
+for p in (str(MODEL_DIR), str(ROOT)):
+    if p not in sys.path:
+        sys.path.append(p)
+
+if "maia3" in sys.modules and not getattr(sys.modules["maia3"], "__file__", None):
+    del sys.modules["maia3"]
+
+from Model.implementation import Clone, S
+from Model.features import PIECE_TYPES, VALUES, compute_context_features, compute_move_features
 from maia3.dataset import get_legal_moves_mask, tokenize_board
 from maia3.uci import Maia3UCIEngine, parse_args
 
@@ -100,6 +109,28 @@ class ReplayMoveResult(tuple):
 
     def __repr__(self) -> str:
         return f"ReplayMoveResult(move='{self.move_san}', new_clock_time={self.new_clock_time}, seconds_spent={self.seconds_spent})"
+
+
+def sample_move_index(scores_1d: torch.Tensor, temperature: float = 0.7, top_p: float = 0.85) -> int:
+    """Samples a move slot index from 1-D scores using top-p nucleus sampling."""
+    if temperature <= 0.0:
+        return int(torch.argmax(scores_1d).item())
+
+    scaled = scores_1d / max(temperature, 1e-4)
+    probs = torch.softmax(scaled, dim=-1)
+
+    if top_p < 1.0:
+        sorted_probs, sorted_idx = torch.sort(probs, descending=True)
+        cumulative = torch.cumsum(sorted_probs, dim=-1)
+        keep = cumulative <= top_p
+        keep[0] = True  # Always keep at least the #1 candidate move
+        kept_probs = sorted_probs[keep]
+        kept_idx = sorted_idx[keep]
+        kept_probs = kept_probs / kept_probs.sum()
+        choice = torch.multinomial(kept_probs, num_samples=1).item()
+        return int(kept_idx[choice].item())
+
+    return int(torch.multinomial(probs, num_samples=1).item())
 
 
 def _get_or_load_models(
@@ -161,7 +192,7 @@ def replay_clone_move(
         fen: Current board state in FEN notation (e.g. 'r1bqkbnr/pppp1ppp/2n5/4p3/3PP3/5N2/PPP2PPP/RNBQKB1R b KQkq d3 0 3').
         clone_color: Color of the clone ("white"/"black", "w"/"b", or chess.WHITE/chess.BLACK).
         clone_time: Current remaining clock time for the clone in seconds.
-        weights_path: Path to clone weights checkpoint (e.g. "FINAL_MODEL/clone.pt").
+        weights_path: Path to clone weights checkpoint (e.g. "models/opponent.pt").
         params: Optional dictionary of inference parameters:
             - elo: Clone Elo rating (default: 1500)
             - maia_checkpoint: Path to Maia checkpoint (default: models/maia3-5m.pt)
@@ -204,11 +235,13 @@ def replay_clone_move(
         raise ValueError(f"It is {side_to_move}'s turn in FEN, but clone color was specified as {clone_side}.")
 
     # 3. Parse parameters
-    elo = int(merged_params.get("elo", 1500))
+    elo = int(merged_params.get("elo", 1800))
+    opp_elo = int(merged_params.get("opp_elo", elo))
     maia_ckpt = merged_params.get("maia_checkpoint")
     opp_time = float(merged_params.get("opp_time", clone_time))
     opp_last_think = float(merged_params.get("opp_last_think", 0.0))
-    temperature = float(merged_params.get("temperature", 1.0))
+    temperature = float(merged_params.get("temperature", 0.7))
+    top_p = float(merged_params.get("top_p", 0.85))
     device = merged_params.get("device")
 
     # 4. Load models from cache
@@ -218,15 +251,16 @@ def replay_clone_move(
         device=device,
     )
 
-    # 5. Compute Maia-3 legal moves and logits
+    # 5. Compute Maia-3 legal moves and logits conditioned on both ratings
     engine.board = board.copy()
     tokens = engine._tokens_from_history(
         deque([tokenize_board(board)], maxlen=engine.cfg.history)
     ).unsqueeze(0).to(engine.cfg.device)
 
     elos = torch.tensor([elo], dtype=torch.long, device=engine.cfg.device)
+    opp_elos = torch.tensor([opp_elo], dtype=torch.long, device=engine.cfg.device)
     with torch.no_grad():
-        logits_move, _, _ = engine.model(tokens, elos, elos)
+        logits_move, _, _ = engine.model(tokens, elos, opp_elos)
     logits_full = logits_move[0].float().cpu()
 
     mask = get_legal_moves_mask(board, engine.all_moves_dict)
@@ -240,30 +274,71 @@ def replay_clone_move(
     if not moves:
         raise ValueError(f"No legal moves available for position: {fen}")
 
-    if len(moves) > S:
-        top = torch.topk(torch.stack(vals), S).indices.tolist()
-        moves = [moves[i] for i in top]
-        vals = [vals[i] for i in top]
+    # CRITICAL: Sort legal moves descending by Maia-3 logit
+    # This precisely matches the training representation in Model/maia_extractor.py!
+    sorted_pairs = sorted(zip(moves, vals), key=lambda pair: pair[1].item(), reverse=True)
+    if len(sorted_pairs) > S:
+        sorted_pairs = sorted_pairs[:S]
+
+    moves = [p[0] for p in sorted_pairs]
+    vals = torch.stack([p[1] for p in sorted_pairs])
+    n = len(moves)
 
     # 6. Extract 28 features (16 move features + 12 context features)
     clocks = {
         board.turn: float(clone_time),
         not board.turn: float(opp_time),
     }
-    avg_think = 0.0
-    X, packed, mask_tensor = features(board, moves, torch.stack(vals), clocks, opp_last_think, avg_think)
+    avg_think = float(merged_params.get("avg_think", 0.0))
+    ply = board.fullmove_number * 2 - (2 if board.turn == chess.WHITE else 1)
+
+    # Softmax probabilities over legal moves
+    maia_probs = torch.softmax(vals, dim=0)
+
+    # 12 Context features
+    context_feats = compute_context_features(
+        board=board,
+        own_clock=clocks[board.turn],
+        opp_clock=clocks[not board.turn],
+        ply=ply,
+        opp_last_think_s=opp_last_think,
+        avg_think_s=avg_think,
+        num_legal_moves=n,
+        probs_tensor=maia_probs,
+    )
+
+    # 16 Move features per legal move
+    rows = []
+    for slot_idx, m in enumerate(moves):
+        logit_val = vals[slot_idx].item()
+        prob_val = maia_probs[slot_idx].item()
+        rank_val = slot_idx + 1  # 1-based rank (1 for top Maia move)
+        log_rank_val = math.log(rank_val)
+
+        move_feats = compute_move_features(
+            board=board,
+            move=m,
+            maia_logit=logit_val,
+            maia_prob=prob_val,
+            maia_log_rank=log_rank_val,
+        )
+        rows.append(move_feats + context_feats)
+
+    X = torch.zeros(1, S, 28)
+    X[0, :n] = torch.tensor(rows, dtype=torch.float)
+    packed = torch.zeros(1, S)
+    packed[0, :n] = vals
+    mask_tensor = torch.zeros(1, S)
+    mask_tensor[0, :n] = 1.0
 
     # 7. Clone forward pass
     with torch.no_grad():
         offsets, time_out = clone(X)
 
     scores = (packed + offsets).masked_fill(mask_tensor == 0, float("-inf"))
-    n = len(moves)
 
-    # 8. Move Selection (Sampling)
-    scaled_scores = scores[0, :n] / max(temperature, 1e-4)
-    probs = torch.softmax(scaled_scores, dim=0)
-    slot = torch.multinomial(probs, 1).item()
+    # 8. Move Selection via Top-P Nucleus Sampling
+    slot = sample_move_index(scores[0, :n], temperature=temperature, top_p=top_p)
 
     chosen_move = moves[slot]
     move_san = board.san(chosen_move)

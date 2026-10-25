@@ -58,7 +58,7 @@
       turnColor: chess.turn() === 'w' ? 'white' : 'black',
       movable: {
         free: false,
-        color: interactive ? 'both' : undefined,
+        color: interactive ? (viewMode === 'focused' ? orientation : 'both') : undefined,
         dests: interactive ? getLegalDests(chess) : new Map(),
         events: {
           after: (orig, dest) => {
@@ -131,6 +131,7 @@
   $effect(() => {
     if (ground) {
       ground.set(getConfig());
+      refreshBounds();
     }
   });
 
