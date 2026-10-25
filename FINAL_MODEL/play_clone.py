@@ -1,8 +1,16 @@
 import math
+import os
 import random
+import sys
 import time
 from collections import deque
 from pathlib import Path
+
+DIR = Path(__file__).resolve().parent
+ROOT = DIR.parent
+for p in (str(ROOT / "maia3"), str(ROOT), str(DIR)):
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 import chess
 import torch
@@ -154,7 +162,18 @@ def clone_move(board, elo, clocks, opp_last, think_times):
 def play(weights=None):
     global engine, clone
     weights = Path(weights) if weights else Path(__file__).with_name("clone.pt")
-    cfg = parse_args(["--model", "maia3-5m", "--use-uci-history"])
+    local_ckpt = next(
+        (str(p) for p in [
+            ROOT / "models" / "maia3-5m.pt",
+            DIR.parent / "models" / "maia3-5m.pt",
+            Path("./models/maia3-5m.pt"),
+        ] if p.is_file()),
+        None,
+    )
+    uci_args = ["--model", "maia3-5m", "--use-uci-history"]
+    if local_ckpt:
+        uci_args.extend(["--checkpoint", local_ckpt])
+    cfg = parse_args(uci_args)
     engine = Maia3UCIEngine(cfg)
     clone = Clone()
     clone.load_state_dict(torch.load(weights, map_location="cpu", weights_only=True))

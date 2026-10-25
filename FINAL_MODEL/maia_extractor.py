@@ -34,7 +34,7 @@ import torch.nn.functional as F
 
 MODEL_DIR = Path(__file__).resolve().parent
 ROOT = MODEL_DIR.parent
-for _path in (str(ROOT), str(ROOT / "model_dev"), str(MODEL_DIR)):
+for _path in (str(ROOT / "maia3"), str(ROOT), str(MODEL_DIR)):
     if _path not in sys.path:
         sys.path.insert(0, _path)
 
@@ -43,7 +43,10 @@ from maia3.model_registry import apply_model_config, resolve_checkpoint_path, re
 from maia3.uci import load_model
 from maia3.utils import get_all_possible_moves, mirror_move
 
-from pipeline.features import compute_context_features, compute_move_features
+try:
+    from features import compute_context_features, compute_move_features
+except ImportError:
+    from Model.features import compute_context_features, compute_move_features
 from snapshots import CLK_RE, DropGame, parse_clock, parse_time_control, _to_int, make_game_id
 
 MAX_SLOTS = 64
@@ -60,7 +63,11 @@ def load_maia3_model(
 
     spec = resolve_model_spec(model_name)
     if not Path(checkpoint_path).is_file():
-        checkpoint_path = resolve_checkpoint_path(spec)
+        local_ckpt = ROOT / "models" / "maia3-5m.pt"
+        if local_ckpt.is_file():
+            checkpoint_path = str(local_ckpt)
+        else:
+            checkpoint_path = resolve_checkpoint_path(spec)
     cfg = SimpleNamespace(
         device=device,
         trust_checkpoint=True,
@@ -163,22 +170,28 @@ def replay_game_to_snapshots(row: dict, game_order: int = 0) -> list[dict]:
 
 
 def extract_snapshots_and_maia_logits(
-    csv_path: str,
+    csv_path: Optional[str] = None,
     checkpoint_path: str = "./models/maia3-5m.pt",
     model_name: str = "maia3-5m",
     batch_size: int = 128,
     limit_games: Optional[int] = None,
     player_id: Optional[str] = None,
+    rows: Optional[list[dict]] = None,
 ) -> tuple[pd.DataFrame, dict[str, torch.Tensor]]:
     """
-    Parses games CSV, runs Maia-3 in batches, and builds both:
+    Parses games (from CSV or in-memory rows), runs Maia-3 in batches, and builds both:
     1. A pandas DataFrame table of snapshots with logits
     2. PyTorch tensors (X, maia_logits, mask, target_idx, seconds, time_label_valid)
     """
-    print(f"Loading games from {csv_path}...")
-    with open(csv_path, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        rows = list(reader)
+    if rows is None:
+        if not csv_path:
+            raise ValueError("Must provide either csv_path or rows.")
+        print(f"Loading games from {csv_path}...")
+        with open(csv_path, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+    else:
+        print(f"Processing {len(rows)} in-memory games...")
 
     if player_id:
         rows = [r for r in rows if r.get("player_id", "").strip().lower() == player_id.lower()]

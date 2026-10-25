@@ -1,5 +1,5 @@
 """
-pipeline/features.py - Compute the 28 features per legal move.
+Model/features.py - Compute the 28 features per legal move.
 
 Directly aligned with Model/play_clone.py and Model/implementation.py:
   16 move features:
@@ -119,3 +119,4 @@ def compute_move_features(
         float(forward),
         float(hung),
     ]
+

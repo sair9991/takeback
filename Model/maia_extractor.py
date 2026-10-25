@@ -34,7 +34,7 @@ import torch.nn.functional as F
 
 MODEL_DIR = Path(__file__).resolve().parent
 ROOT = MODEL_DIR.parent
-for _path in (str(ROOT), str(ROOT / "model_dev"), str(MODEL_DIR)):
+for _path in (str(ROOT / "maia3"), str(ROOT), str(MODEL_DIR)):
     if _path not in sys.path:
         sys.path.insert(0, _path)
 
@@ -43,8 +43,12 @@ from maia3.model_registry import apply_model_config, resolve_checkpoint_path, re
 from maia3.uci import load_model
 from maia3.utils import get_all_possible_moves, mirror_move
 
-from pipeline.features import compute_context_features, compute_move_features
-from snapshots import CLK_RE, DropGame, parse_clock, parse_time_control, _to_int, make_game_id
+try:
+    from Model.features import compute_context_features, compute_move_features
+    from Model.snapshots import CLK_RE, DropGame, parse_clock, parse_time_control, _to_int, make_game_id
+except ImportError:
+    from features import compute_context_features, compute_move_features
+    from snapshots import CLK_RE, DropGame, parse_clock, parse_time_control, _to_int, make_game_id
 
 MAX_SLOTS = 64
 FEATURE_DIM = 28

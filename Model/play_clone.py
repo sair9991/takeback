@@ -1,8 +1,16 @@
 import math
+import os
 import random
+import sys
 import time
 from collections import deque
 from pathlib import Path
+
+MODEL_DIR = Path(__file__).resolve().parent
+ROOT = MODEL_DIR.parent
+for p in (str(ROOT / "maia3"), str(ROOT), str(MODEL_DIR)):
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 import chess
 import torch
@@ -15,7 +23,17 @@ from maia3.uci import Maia3UCIEngine, parse_args
 PIECE_TYPES = [chess.PAWN, chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN, chess.KING]
 VALUES = {chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3, chess.ROOK: 5, chess.QUEEN: 9}
 
-cfg = parse_args(["--model", "maia3-5m", "--use-uci-history"])
+local_ckpt = next(
+    (str(p) for p in [
+        Path(__file__).resolve().parent.parent / "models" / "maia3-5m.pt",
+        Path("./models/maia3-5m.pt"),
+    ] if p.is_file()),
+    None,
+)
+uci_args = ["--model", "maia3-5m", "--use-uci-history"]
+if local_ckpt:
+    uci_args.extend(["--checkpoint", local_ckpt])
+cfg = parse_args(uci_args)
 engine = Maia3UCIEngine(cfg)
 clone = Clone()
 clone.load_state_dict(torch.load(Path(__file__).with_name("clone.pt"), map_location="cpu", weights_only=True))

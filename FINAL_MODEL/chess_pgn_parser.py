@@ -1,10 +1,48 @@
-import requests
-import pandas as pd
+import sys
 import re
 import time
 from pathlib import Path
 
-USERNAME = input("Enter your chess.com username: ")
+try:
+    import requests
+except ImportError:
+    import urllib.request
+    import urllib.error
+    import json
+
+    class _RequestsShim:
+        class _Response:
+            def __init__(self, data: bytes, status_code: int):
+                self._data = data
+                self.status_code = status_code
+                self.text = data.decode("utf-8", errors="replace")
+            def json(self):
+                return json.loads(self.text)
+            def raise_for_status(self):
+                if self.status_code >= 400:
+                    raise RuntimeError(f"HTTP Error {self.status_code}")
+
+        @staticmethod
+        def get(url: str, headers: dict = None):
+            req = urllib.request.Request(url, headers=headers or {})
+            try:
+                with urllib.request.urlopen(req) as resp:
+                    return _RequestsShim._Response(resp.read(), resp.status)
+            except urllib.error.HTTPError as e:
+                return _RequestsShim._Response(e.read(), e.code)
+
+    requests = _RequestsShim()
+
+import pandas as pd
+
+DIR = Path(__file__).resolve().parent
+ROOT = DIR.parent
+for p in (str(ROOT), str(DIR)):
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+from src.backend.database import Database
+
 HEADERS = {
     "User-Agent": "chess-pgn-downloader/1.0 (username: your_username; contact: you@example.com)"
 }
@@ -101,8 +139,43 @@ def build_dataframe(username, limit=500):
     rows.reverse()
     return pd.DataFrame(rows)
 
-df = build_dataframe(USERNAME)
-csv_path = Path(__file__).with_name(f"{USERNAME.lower()}.csv")
-df.to_csv(csv_path, index=False)
-print(df.shape)
-print(f"Saved {csv_path.name}")
+
+def fetch_user_games(username: str, limit: int = 500) -> list[dict]:
+    """Fetches user games from Chess.com as in-memory dicts without saving any CSV."""
+    df = build_dataframe(username, limit=limit)
+    return df.to_dict(orient="records")
+
+
+def fetch_user_games_and_save(username: str, limit: int = 500, out_csv: Path | str | None = None) -> tuple[Path, dict]:
+    """
+    Fetches games from Chess.com, saves the CSV, stores the username in the db,
+    and inserts the games and moves into the SQLite database.
+    """
+    username = username.strip()
+    user_id = username.lower()
+
+    # 1. Store username in db
+    db = Database()
+    db.create_or_get_user(user_id=user_id, chess_com_username=username)
+
+    # 2. Fetch games and write CSV
+    df = build_dataframe(username, limit=limit)
+    if out_csv is None:
+        out_csv = Path(__file__).resolve().parent / f"{user_id}.csv"
+    else:
+        out_csv = Path(out_csv)
+    df.to_csv(out_csv, index=False)
+    print(f"Downloaded {len(df)} games to {out_csv.name}")
+
+    # 3. Add data to games and moves tables in sqlite database
+    stats = db.import_games_csv(out_csv, src="chess.com", default_player_id=user_id)
+    print(f"Stored in DB: {stats['games_imported']} games, {stats['moves_imported']} moves.")
+    return out_csv, stats
+
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        username = sys.argv[1]
+    else:
+        username = input("Enter your chess.com username: ")
+    fetch_user_games_and_save(username)
