@@ -12,6 +12,9 @@ from analysis_pkg.model_analysis import (
     get_postgres_connection,
     get_postgres_data,
     train_model,
+    benchmark_model,
+    batch_benchmark,
+    format_benchmark_tables,
 )
 
 __all__ = [
@@ -24,4 +27,7 @@ __all__ = [
     "get_postgres_connection",
     "get_postgres_data",
     "train_model",
+    "benchmark_model",
+    "batch_benchmark",
+    "format_benchmark_tables",
 ]

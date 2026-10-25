@@ -72,9 +72,19 @@ def train_clone_endpoint(
         stats = model_repo.get_model_stats(opp_clean)
         path = model_repo.get_model_weights_path(opp_clean)
         if stats and path and path.is_file() and stats.get("val_loss") is not None:
+            # Ensure style description is generated and cached in DB if missing
+            if not stats.get("style_description"):
+                from app.services import commentary_service
+                style = commentary_service.describe_clone_style(opp_clean, refresh=True)
+                stats["style_description"] = style.get("style_description")
+            rating = stats.get("chess_elo") or stats.get("chess_rating") or stats.get("blitz_rating")
             return {
                 "status": "cached",
                 "player_id": opp_clean,
+                "rating": rating,
+                "chess_elo": rating,
+                "chess_rating": rating,
+                "blitz_rating": rating,
                 "val_accuracy": stats.get("val_accuracy"),
                 "val_loss": stats.get("val_loss"),
                 "model_stats": stats,
@@ -84,9 +94,14 @@ def train_clone_endpoint(
         from app.services import training_service
         training_service.run_training_pipeline(opp_clean, trained_by_user_id=user_id)
         stats = model_repo.get_model_stats(opp_clean)
+        rating = stats.get("chess_elo") if stats else None
         return {
             "status": "completed",
             "player_id": opp_clean,
+            "rating": rating,
+            "chess_elo": rating,
+            "chess_rating": rating,
+            "blitz_rating": rating,
             "val_accuracy": stats.get("val_accuracy") if stats else None,
             "val_loss": stats.get("val_loss") if stats else None,
             "model_stats": stats,
@@ -95,12 +110,84 @@ def train_clone_endpoint(
         raise HTTPException(status_code=500, detail=f"Training failed: {str(e)}")
 
 
+@router.post("/api/clones/{player_id}/eval")
+def evaluate_clone_endpoint(player_id: str) -> dict[str, Any]:
+    """Run real move_accuracy evaluation on clone model using player's games and Maia-3 logits."""
+    from app.services import training_service
+    try:
+        return training_service.evaluate_existing_clone(player_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}")
+
+
+@router.post("/api/clones/eval-all")
+def evaluate_all_clones_endpoint() -> list[dict[str, Any]]:
+    """Scan and run real move_accuracy evaluation across all disk clone models."""
+    from app.services import training_service
+    return training_service.evaluate_all_clones()
+
+
+@router.post("/api/clones/{player_id}/benchmark")
+@router.get("/api/clones/{player_id}/benchmark")
+def benchmark_clone_endpoint(
+    player_id: str,
+    limit: int = Query(default=50, ge=1, le=100),
+) -> dict[str, Any]:
+    """Run full comparative benchmark (Maia-3 vs Clone move accuracy and decision time predictions)."""
+    from app.services import training_service
+    try:
+        return training_service.benchmark_clone_performance(player_id, limit=limit)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Benchmark failed: {str(e)}")
+
+
+@router.post("/api/clones/{player_id}/benchmark-snapshots")
+@router.get("/api/clones/{player_id}/benchmark-snapshots")
+def benchmark_clone_snapshots_endpoint(
+    player_id: str,
+    counts: Optional[str] = Query(default=None, description="Comma-separated snapshot sizes, e.g. 50,100,250,500,1000"),
+    limit: int = Query(default=40, ge=1, le=100),
+) -> list[dict[str, Any]]:
+    """Run comparative benchmark across varying snapshot sample sizes."""
+    from app.services import training_service
+    snapshot_counts = None
+    if counts:
+        try:
+            snapshot_counts = [int(c.strip()) for c in counts.split(",") if c.strip()]
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid comma-separated integer counts")
+
+    try:
+        return training_service.benchmark_snapshot_scaling(player_id, snapshot_counts=snapshot_counts, limit=limit)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Snapshot scaling benchmark failed: {str(e)}")
+
+
 @router.get("/api/clones/{player_id}/stats")
 def get_clone_stats(player_id: str) -> dict[str, Any]:
     """Retrieve usage stats, access counter, and timestamps for a specific model."""
     stats = model_repo.get_model_stats(player_id)
     if not stats:
         raise HTTPException(status_code=404, detail=f"Model for '{player_id}' not found")
+
+    # If val_accuracy is missing, run real evaluation
+    if stats.get("val_accuracy") is None:
+        try:
+            from app.services import training_service
+            eval_res = training_service.evaluate_existing_clone(player_id)
+            if eval_res and eval_res.get("val_accuracy") is not None:
+                stats["val_accuracy"] = eval_res["val_accuracy"]
+                stats["val_loss"] = eval_res["val_loss"]
+        except Exception:
+            pass
+
+    if not stats.get("style_description"):
+        try:
+            style_resp = commentary_service.describe_clone_style(player_id)
+            if style_resp and style_resp.get("style_description"):
+                stats["style_description"] = style_resp["style_description"]
+        except Exception:
+            pass
     return stats
 
 

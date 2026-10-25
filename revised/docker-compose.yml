@@ -37,7 +37,7 @@ services:
       --port 8080
       -c 2048
       --threads 4
-      --embedding
+      --embeddings
 
   backend:
     build:
@@ -55,6 +55,7 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://chess_user:chess_password@db:5432/chess_db}
       GEMMA_API_URL: ${GEMMA_API_URL:-http://gemma:8080}
+      GEMMA_TIMEOUT: ${GEMMA_TIMEOUT:-60.0}
       STOCKFISH_PATH: ${STOCKFISH_PATH:-/usr/games/stockfish}
       DEFAULT_DEVICE: ${DEFAULT_DEVICE:-cpu}
       JWT_SECRET: ${JWT_SECRET:-chess-clone-dev-secret-key-32chars-min!!}

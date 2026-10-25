@@ -11,5 +11,6 @@ export interface Clone {
   initials?: string;
   bio?: string;
   styleDescription?: string;
-  similarityScore?: number;
+  valAccuracy?: number;
+  createdAt?: string;
 }

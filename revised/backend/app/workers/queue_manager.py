@@ -49,7 +49,19 @@ async def worker():
                 except Exception as e:
                     print(f"[Worker] Error pre-caching analysis for {gid}: {e}")
 
-            await broadcast(job_id, {"status": "completed", "progress": 100, "message": f"Model for {opp} cached and ready!"})
+            stats = model_repo.get_model_stats(opp)
+            rating = stats.get("chess_elo") if stats else None
+            await broadcast(
+                job_id,
+                {
+                    "status": "completed",
+                    "progress": 100,
+                    "message": f"Model for {opp} cached and ready!",
+                    "rating": rating,
+                    "chess_elo": rating,
+                    "val_accuracy": stats.get("val_accuracy") if stats else None,
+                },
+            )
         except Exception as e:
             print(f"[Worker Error] {e}")
             await broadcast(job_id, {"status": "failed", "progress": 0, "message": str(e)})

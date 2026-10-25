@@ -11,9 +11,11 @@
 
   onMount(async () => {
     const user = await getMe();
-    if (user && !user.chess_com_username) {
-      goto('/?connect=true');
-    } else if (user?.chess_com_username) {
+    if (!user) {
+      goto('/');
+      return;
+    }
+    if (user?.chess_com_username) {
       // Automatically pull in their games from Chess.com upon login
       fetchUserGames(user.chess_com_username, true).catch(() => {});
     }
@@ -26,16 +28,6 @@
 </script>
 
 <nav class="navigation_bar">
-  <a class={page.url.pathname === "/app" ? 'nav_active' : ''} href="/app" aria-label="Home" title="Home">
-    <span class="nav_text">Home</span>
-    <span class="nav_icon">
-      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
-        <polyline points="9 22 9 12 15 12 15 22"></polyline>
-      </svg>
-    </span>
-  </a>
-
   <a class={page.url.pathname.startsWith('/app/analyze') ? 'nav_active' : ''} href="/app/analyze" aria-label="Analyze" title="Analyze">
     <span class="nav_text">Analyze</span>
     <span class="nav_icon">
@@ -46,11 +38,12 @@
     </span>
   </a>
 
-  <a class={page.url.pathname.startsWith('/app/play') ? 'nav_active' : ''} href="/app/play" aria-label="Play" title="Play">
-    <span class="nav_text">Play</span>
+  <a class={page.url.pathname.startsWith('/app/explore') || page.url.pathname.startsWith('/app/play') ? 'nav_active' : ''} href="/app/explore" aria-label="Explore" title="Explore">
+    <span class="nav_text">Explore</span>
     <span class="nav_icon">
-      <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-        <polygon points="6 4 20 12 6 20 6 4"></polygon>
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"></circle>
+        <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76" fill="currentColor"></polygon>
       </svg>
     </span>
   </a>

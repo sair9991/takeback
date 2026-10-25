@@ -44,20 +44,6 @@ DEFAULT_POSTGRES_URL = os.environ.get(
     "postgresql://chess_user:chess_password@localhost:5432/chess_db",
 )
 
-# Reference benchmark metrics for standard clone models
-KNOWN_BENCHMARK_METRICS = {
-    "stuffyness": {"loss": 1.714, "accuracy": 0.645},
-    "rguruna": {"loss": 1.682, "accuracy": 0.658},
-    "kovinar": {"loss": 1.748, "accuracy": 0.627},
-    "ch_uz": {"loss": 1.695, "accuracy": 0.651},
-    "aemara84": {"loss": 1.730, "accuracy": 0.639},
-    "colebunker_123": {"loss": 1.675, "accuracy": 0.662},
-    "j4poxc": {"loss": 1.761, "accuracy": 0.619},
-    "niki8428": {"loss": 1.705, "accuracy": 0.642},
-    "maxthesicilian": {"loss": 1.688, "accuracy": 0.655},
-    "ondrejandre": {"loss": 1.718, "accuracy": 0.635},
-}
-
 
 # ==============================================================================
 # Internal HTTP Helpers
@@ -144,10 +130,12 @@ def get_model_stats(
 
     # 1. First, check backend clone stats endpoint
     existing_stats = None
+    fetch_err = None
     try:
         existing_stats = _http_call(stats_url, method="GET", timeout=30)
-    except Exception:
+    except Exception as e:
         existing_stats = None
+        fetch_err = str(e)
 
     has_metrics = existing_stats and existing_stats.get("val_loss") is not None
 
@@ -190,7 +178,7 @@ def get_model_stats(
         except Exception as e:
             train_err = str(e)
 
-    # 3. Fallback: Check PostgreSQL directly if API did not return metrics
+    # 3. Check PostgreSQL directly if API did not return metrics
     try:
         db_rows = get_postgres_data(
             "SELECT * FROM v_model_stats WHERE LOWER(player_id) = %s",
@@ -201,9 +189,6 @@ def get_model_stats(
             db_rec = db_rows[0]
             loss = db_rec.get("val_loss")
             acc = db_rec.get("val_accuracy")
-            if loss is None and clean_id in KNOWN_BENCHMARK_METRICS:
-                loss = KNOWN_BENCHMARK_METRICS[clean_id]["loss"]
-                acc = KNOWN_BENCHMARK_METRICS[clean_id]["accuracy"]
 
             if loss is not None:
                 return {
@@ -221,22 +206,6 @@ def get_model_stats(
     except Exception:
         pass
 
-    # 4. Fallback for known existing benchmark models
-    if clean_id in KNOWN_BENCHMARK_METRICS:
-        bench = KNOWN_BENCHMARK_METRICS[clean_id]
-        return {
-            "person": clean_id,
-            "loss": bench["loss"],
-            "accuracy": bench["accuracy"],
-            "weights_path": f"models/{clean_id}.pt",
-            "model_name": "clone",
-            "access_count": existing_stats.get("access_count", 0) if existing_stats else 0,
-            "style_description": existing_stats.get("style_description") if existing_stats else None,
-            "status": "cached",
-            "error": None,
-            "details": existing_stats or {},
-        }
-
     return {
         "person": clean_id,
         "loss": None,
@@ -245,8 +214,8 @@ def get_model_stats(
         "model_name": existing_stats.get("model_name", "clone") if existing_stats else "clone",
         "access_count": existing_stats.get("access_count", 0) if existing_stats else 0,
         "style_description": existing_stats.get("style_description") if existing_stats else None,
-        "status": "error" if train_err else ("not_found" if not existing_stats else "untrained"),
-        "error": train_err,
+        "status": "error" if (train_err or fetch_err) else ("not_found" if not existing_stats else "untrained"),
+        "error": train_err or fetch_err,
         "details": existing_stats or {},
     }
 
@@ -377,11 +346,6 @@ def get_person_postgres_data(
     )
     model_rec = model_rows[0] if model_rows else None
 
-    # Auto-heal NULL metrics in model record if known
-    if model_rec and model_rec.get("val_loss") is None and clean_id in KNOWN_BENCHMARK_METRICS:
-        model_rec["val_loss"] = KNOWN_BENCHMARK_METRICS[clean_id]["loss"]
-        model_rec["val_accuracy"] = KNOWN_BENCHMARK_METRICS[clean_id]["accuracy"]
-
     games_sample = get_postgres_data(
         "SELECT game_id, player_id, player_color, opponent_username, result, time_control, date "
         "FROM games WHERE LOWER(player_id) = %s OR LOWER(opponent_username) = %s "
@@ -437,12 +401,6 @@ def get_batch_postgres_data(
     model_rows = get_postgres_data(models_sql, tuple(clean_ids), database_url=database_url)
     models_by_person = {r["player_id"].lower(): r for r in model_rows}
 
-    # Auto-heal NULL metrics for known models
-    for pid, model in models_by_person.items():
-        if model and model.get("val_loss") is None and pid in KNOWN_BENCHMARK_METRICS:
-            model["val_loss"] = KNOWN_BENCHMARK_METRICS[pid]["loss"]
-            model["val_accuracy"] = KNOWN_BENCHMARK_METRICS[pid]["accuracy"]
-
     # Match player both as player_id and opponent_username
     games_sql = f"""
         SELECT player, COUNT(*) as game_count FROM (
@@ -459,20 +417,119 @@ def get_batch_postgres_data(
 
     result = {}
     for p in clean_ids:
-        model = models_by_person.get(p)
-        if model is None and p in KNOWN_BENCHMARK_METRICS:
-            bench = KNOWN_BENCHMARK_METRICS[p]
-            model = {
-                "player_id": p,
-                "model_name": "clone",
-                "weights_path": f"models/{p}.pt",
-                "val_loss": bench["loss"],
-                "val_accuracy": bench["accuracy"],
-                "access_count": 0,
-            }
-
         result[p] = {
-            "model": model,
+            "model": models_by_person.get(p),
             "total_games": counts_by_person.get(p, 0),
         }
     return result
+
+
+# ==============================================================================
+# Model Comparative Benchmarks (Maia-3 Baseline vs. Clone & Time Predictions)
+# ==============================================================================
+
+def benchmark_model(
+    person: str,
+    limit_games: int = 50,
+    backend_url: str = DEFAULT_BACKEND_URL,
+    timeout: int = 600,
+) -> Dict[str, Any]:
+    """
+    Run full comparative benchmark on real games and models for a specific person.
+    Evaluates:
+      1. Move Prediction: Baseline Maia-3 vs Clone Model (Top-1 %, Top-3 %, Cross-Entropy Loss).
+      2. Decision Time Prediction: Log-normal tempo head vs actual move clocks.
+
+    Strict mode: Connects directly to backend API. Raises ConnectionError or RuntimeError
+    if the service is unreachable. No fallbacks or synthetic mock data.
+    """
+    clean_id = person.strip().lower()
+    encoded = urllib.parse.quote(clean_id)
+    url = f"{backend_url}/api/clones/{encoded}/benchmark?limit={int(limit_games)}"
+    return _http_call(url, method="POST", timeout=timeout)
+
+
+def batch_benchmark(
+    people: List[str],
+    limit_games: int = 50,
+    backend_url: str = DEFAULT_BACKEND_URL,
+    timeout: int = 600,
+) -> List[Dict[str, Any]]:
+    """
+    Run benchmarks sequentially across multiple players.
+    Raises ConnectionError or RuntimeError immediately if backend connection fails.
+    """
+    results = []
+    for person in people:
+        clean = person.strip().lower()
+        res = benchmark_model(clean, limit_games=limit_games, backend_url=backend_url, timeout=timeout)
+        results.append(res)
+    return results
+
+
+def format_benchmark_tables(results: List[Dict[str, Any]]) -> str:
+    """
+    Format benchmark results into clean GitHub-flavored markdown comparison tables:
+    1. Move Prediction Performance (Baseline Maia-3 vs Clone Model)
+    2. Decision Time Prediction Accuracy (Log-Normal Tempo Head vs Actual Game Clocks)
+    """
+    lines = []
+
+    # Table 1: Move Prediction
+    lines.append("### 1. Move Prediction Accuracy & Loss (Baseline Maia-3 vs. Clone Model)")
+    lines.append("")
+    lines.append("| Player | Analyzed Games | Positions | Maia Top-1 (%) | Clone Top-1 (%) | Δ Top-1 | Maia Top-3 (%) | Clone Top-3 (%) | Δ Top-3 | Maia Loss | Clone Loss | Loss Δ |")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
+
+    for r in results:
+        pid = r.get("player_id", "")
+        games = r.get("games_analyzed", 0)
+        pos = r.get("positions_evaluated", 0)
+        mv = r.get("move_evaluation", {})
+
+        m_top1 = mv.get("maia_top1_pct", 0.0)
+        c_top1 = mv.get("clone_top1_pct", 0.0)
+        d_top1 = mv.get("top1_delta_pct", 0.0)
+        sign_top1 = f"+{d_top1:.2f}%" if d_top1 > 0 else f"{d_top1:.2f}%"
+
+        m_top3 = mv.get("maia_top3_pct", 0.0)
+        c_top3 = mv.get("clone_top3_pct", 0.0)
+        d_top3 = mv.get("top3_delta_pct", 0.0)
+        sign_top3 = f"+{d_top3:.2f}%" if d_top3 > 0 else f"{d_top3:.2f}%"
+
+        m_loss = mv.get("maia_loss", 0.0)
+        c_loss = mv.get("clone_loss", 0.0)
+        l_red = mv.get("loss_reduction", 0.0)
+        sign_lred = f"-{l_red:.4f}" if l_red > 0 else (f"+{abs(l_red):.4f}" if l_red < 0 else "0.0000")
+
+        lines.append(
+            f"| `{pid}` | {games} | {pos:,} | {m_top1:.2f}% | **{c_top1:.2f}%** | {sign_top1} | "
+            f"{m_top3:.2f}% | **{c_top3:.2f}%** | {sign_top3} | {m_loss:.4f} | **{c_loss:.4f}** | {sign_lred} |"
+        )
+
+    lines.append("")
+    lines.append("### 2. Decision Time Prediction Accuracy (Model Predictions vs. Actual Clocks)")
+    lines.append("")
+    lines.append("| Player | Valid Moves | Actual Med (s) | Pred Med (s) | Δ Tempo (s) | MedAE (s) | MAE (s) | Within ±2s (%) | Within ±5s (%) | Pearson r |")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|")
+
+    for r in results:
+        pid = r.get("player_id", "")
+        tm = r.get("time_evaluation", {})
+        val_moves = tm.get("valid_positions", 0)
+        act_med = tm.get("actual_median_sec", 0.0)
+        prd_med = tm.get("pred_median_sec", 0.0)
+        tempo_delta = tm.get("median_tempo_delta_sec", 0.0)
+        sign_tempo = f"+{tempo_delta:.2f}s" if tempo_delta > 0 else f"{tempo_delta:.2f}s"
+        medae = tm.get("medae_sec", 0.0)
+        mae = tm.get("mae_sec", 0.0)
+        w2 = tm.get("within_2s_pct", 0.0)
+        w5 = tm.get("within_5s_pct", 0.0)
+        corr = tm.get("correlation_r", 0.0)
+
+        lines.append(
+            f"| `{pid}` | {val_moves:,} | {act_med:.2f}s | {prd_med:.2f}s | {sign_tempo} | "
+            f"{medae:.2f}s | {mae:.2f}s | {w2:.1f}% | {w5:.1f}% | {corr:.3f} |"
+        )
+
+    return "\n".join(lines)

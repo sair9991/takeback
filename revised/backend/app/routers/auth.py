@@ -45,7 +45,8 @@ def clear_auth_cookie(response: Response) -> None:
 @router.post("/register", response_model=AuthSuccessResponse)
 def register(payload: RegisterRequest, response: Response, background_tasks: BackgroundTasks):
     """Register a new account with email and password."""
-    existing = user_repo.get_user_by_email(payload.email)
+    clean_email = payload.email.strip().lower()
+    existing = user_repo.get_user_by_email(clean_email)
     if existing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -54,7 +55,7 @@ def register(payload: RegisterRequest, response: Response, background_tasks: Bac
 
     password_hash = auth_service.hash_password(payload.password)
     user = user_repo.create_user_with_password(
-        email=payload.email,
+        email=clean_email,
         password_hash=password_hash,
         chess_com_username=payload.chess_com_username,
     )
@@ -68,13 +69,14 @@ def register(payload: RegisterRequest, response: Response, background_tasks: Bac
 
     token = auth_service.create_access_token(user["user_id"])
     set_auth_cookie(response, token)
-    return AuthSuccessResponse(user=UserResponse(**user))
+    return AuthSuccessResponse(user=UserResponse(**user), token=token)
 
 
 @router.post("/login", response_model=AuthSuccessResponse)
 def login(payload: LoginRequest, response: Response, background_tasks: BackgroundTasks):
     """Authenticate with email and password, setting an HTTP-only session cookie."""
-    user = user_repo.get_user_by_email(payload.email)
+    clean_email = payload.email.strip().lower()
+    user = user_repo.get_user_by_email(clean_email) or user_repo.get_user_by_chess_handle(clean_email)
     if not user or not user.get("password_hash"):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -98,7 +100,7 @@ def login(payload: LoginRequest, response: Response, background_tasks: Backgroun
 
     token = auth_service.create_access_token(user["user_id"])
     set_auth_cookie(response, token)
-    return AuthSuccessResponse(user=UserResponse(**user))
+    return AuthSuccessResponse(user=UserResponse(**user), token=token)
 
 
 @router.post("/logout")

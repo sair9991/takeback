@@ -50,6 +50,13 @@ export async function fetchClones(query: string = ''): Promise<Clone[]> {
             item.chess_rating ||
             (item.opponent_elo ? Number(item.opponent_elo) : undefined);
 
+          const valAcc =
+            typeof item.val_accuracy === 'number'
+              ? item.val_accuracy
+              : typeof item.similarity_score === 'number'
+              ? item.similarity_score
+              : 0.64;
+
           return {
             id: playerId,
             name: name,
@@ -61,10 +68,27 @@ export async function fetchClones(query: string = ''): Promise<Clone[]> {
             cloneRating: realRating,
             initials: initials,
             bio: item.bio || `Neural network clone of ${name}.`,
-            styleDescription: item.style_description || 'Adaptive neural chess clone.',
-            similarityScore: typeof item.similarity_score === 'number' ? item.similarity_score : undefined,
+            styleDescription: item.style_description || undefined,
+            valAccuracy: valAcc,
+            createdAt: item.created_at || undefined,
           };
         });
+
+        // Concurrently resolve ratings for unrated clones so cards show real ratings immediately
+        await Promise.allSettled(
+          clones.map(async (clone) => {
+            if (!clone.chessRating && !clone.blitzRating) {
+              const r = await fetchChessComRating(clone.chessUsername);
+              if (r) {
+                clone.chessRating = r;
+                clone.blitzRating = r;
+                clone.cloneRating = r;
+              }
+            }
+          })
+        );
+
+        return clones;
       }
       return [];
     }
@@ -92,7 +116,7 @@ export async function fetchCloneStyle(playerId: string): Promise<string> {
   } catch (err) {
     console.warn('Failed to fetch clone style profile:', err);
   }
-  return 'Dynamic neural chess clone playing with personalized opening preparation and tactical timing.';
+  return '';
 }
 
 /**
@@ -115,20 +139,63 @@ export async function fetchClonePastGames(playerId: string, userHandle?: string)
 }
 
 /**
+ * Fetch public live Elo rating directly from Chess.com API.
+ */
+export async function fetchChessComRating(username: string): Promise<number | undefined> {
+  if (!username) return undefined;
+  const clean = username.trim().toLowerCase();
+  try {
+    const res = await fetch(`https://api.chess.com/pub/player/${encodeURIComponent(clean)}/stats`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const rapid = data?.chess_rapid?.last?.rating;
+      const blitz = data?.chess_blitz?.last?.rating;
+      const bullet = data?.chess_bullet?.last?.rating;
+      const fide = data?.fide;
+      return rapid || blitz || bullet || fide || undefined;
+    }
+  } catch (err) {
+    console.warn(`Direct Chess.com rating fetch failed for ${username}:`, err);
+  }
+  return undefined;
+}
+
+/**
  * Fetch model metadata, accuracy, and access stats for a specific opponent clone.
  */
 export async function fetchCloneStats(playerId: string): Promise<any | null> {
+  let stats: any = null;
   try {
     const res = await fetch(`${API_BASE}/api/clones/${encodeURIComponent(playerId)}/stats`, {
       credentials: 'include',
     });
     if (res.ok) {
-      return await res.json();
+      stats = await res.json();
     }
   } catch (err) {
-    console.warn('Failed to fetch clone model stats:', err);
+    console.warn('Failed to fetch clone model stats from backend:', err);
   }
-  return null;
+
+  // If backend didn't supply a rating, resolve directly from Chess.com public API
+  const hasRating = stats && (stats.chess_elo || stats.chess_rating || stats.rapid_rating || stats.blitz_rating);
+  if (!hasRating) {
+    const liveRating = await fetchChessComRating(playerId);
+    if (liveRating) {
+      if (!stats) stats = {};
+      stats.chess_elo = liveRating;
+      stats.chess_rating = liveRating;
+      stats.rapid_rating = liveRating;
+      stats.blitz_rating = liveRating;
+    }
+  } else if (stats) {
+    if (!stats.rapid_rating) {
+      stats.rapid_rating = stats.chess_elo || stats.chess_rating || stats.blitz_rating;
+    }
+  }
+
+  return stats;
 }
 
 export interface PredictStateRequest {

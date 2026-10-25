@@ -1,15 +1,32 @@
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.routers import auth, games, analysis, clones, stream
-from app.db.connection import close_pool
+from app.db.connection import close_pool, execute
 from app.workers import queue_manager
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Ensure database vector columns are unconstrained for full Gemma compatibility
+    try:
+        execute("ALTER TABLE models ALTER COLUMN embedding TYPE vector;")
+        execute("ALTER TABLE analyzed_games ALTER COLUMN embedding TYPE vector;")
+    except Exception as e:
+        logger.debug("Database vector migration notice: %s", e)
+
+    # Ensure chess_elo column and updated v_model_stats view exist
+    try:
+        from app.db.repositories import model_repo
+        model_repo.ensure_schema_upgrades()
+    except Exception as e:
+        logger.debug("Database schema upgrade notice: %s", e)
+
     # Start background worker for training pipeline
     worker_task = asyncio.create_task(queue_manager.worker())
     yield

@@ -27,8 +27,9 @@ export async function fetchAnalyzedGames(username?: string): Promise<Game[]> {
     let handle = username?.trim();
     if (!handle) {
       const me = await getMe();
-      handle = me?.chess_com_username || me?.user_id || 'guest';
+      handle = me?.chess_com_username || me?.user_id;
     }
+    if (!handle) return [];
     const res = await fetch(`${API_BASE}/api/users/${encodeURIComponent(handle)}/analyzed-games`, {
       credentials: 'include',
     });
@@ -55,11 +56,14 @@ export async function searchSemanticAnalyzedGames(
   let handle = username?.trim();
   if (!handle) {
     const me = await getMe();
-    handle = me?.chess_com_username || me?.user_id || 'guest';
+    handle = me?.chess_com_username || me?.user_id;
   }
+  if (!handle) return [];
   if (!trimmed) {
     return fetchAnalyzedGames(handle);
   }
+
+  // 1. Try semantic search powered by Gemma vector embeddings
   try {
     const res = await fetch(
       `${API_BASE}/api/users/${encodeURIComponent(handle)}/search-semantic?q=${encodeURIComponent(trimmed)}`,
@@ -67,12 +71,29 @@ export async function searchSemanticAnalyzedGames(
     );
     if (res.ok) {
       const data = await res.json();
-      if (Array.isArray(data)) {
+      if (Array.isArray(data) && data.length > 0) {
         return data;
       }
     }
   } catch (err) {
-    console.warn('Semantic game search failed:', err);
+    console.warn('Semantic game search request error:', err);
   }
+
+  // 2. Resilient fallback to keyword/tag search across game narratives & openings
+  try {
+    const fallbackRes = await fetch(
+      `${API_BASE}/api/users/${encodeURIComponent(handle)}/search-games?q=${encodeURIComponent(trimmed)}`,
+      { credentials: 'include' }
+    );
+    if (fallbackRes.ok) {
+      const fallbackData = await fallbackRes.json();
+      if (Array.isArray(fallbackData)) {
+        return fallbackData;
+      }
+    }
+  } catch (err) {
+    console.warn('Keyword fallback search error:', err);
+  }
+
   return [];
 }

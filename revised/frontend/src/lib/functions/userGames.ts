@@ -63,7 +63,10 @@ export async function requestGameAnalysis(
   let handle = username?.trim();
   if (!handle) {
     const me = await getMe();
-    handle = me?.chess_com_username || me?.user_id || 'guest';
+    handle = me?.chess_com_username || me?.user_id;
+  }
+  if (!handle) {
+    throw new Error('User must be logged in to analyze games');
   }
   const url = opponent
     ? `${API_BASE}/api/users/${encodeURIComponent(handle)}/analyze/${gameId}?opponent=${encodeURIComponent(opponent)}`

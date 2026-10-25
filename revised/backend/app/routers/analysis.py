@@ -94,13 +94,33 @@ def search_semantic(
     q: str,
     limit: int = Query(default=20, ge=1, le=100),
 ):
-    """Natural language semantic vector search powered by local Gemma embeddings."""
-    user_id, _ = _resolve_user(username)
-    embedding = embedding_service.get_text_embedding(q)
-    if not embedding:
-        raise HTTPException(
-            status_code=503,
-            detail="Gemma embedding service is unavailable. Please check that the Gemma model container is running."
-        )
+    """Natural language semantic vector search powered by local Gemma embeddings with hybrid keyword fallback."""
+    user_id, chess_handle = _resolve_user(username)
+    embedding = None
+    try:
+        embedding = embedding_service.get_text_embedding(q)
+    except Exception:
+        pass
 
-    return analysis_repo.search_semantic_games(user_id, embedding, limit=limit)
+    results = []
+    if embedding:
+        try:
+            results = analysis_repo.search_semantic_games(user_id, embedding, limit=limit)
+        except Exception:
+            pass
+
+    # If vector search returned nothing or embedding service is offline, fallback to text/tag matching
+    if not results:
+        keyword_matches = analysis_repo.search_analyzed_games(user_id, q)
+        if not keyword_matches and chess_handle != user_id:
+            keyword_matches = analysis_repo.search_analyzed_games(chess_handle, q)
+
+        results = [
+            SemanticSearchGameResponse(
+                **r,
+                similarity_score=0.80,
+            )
+            for r in keyword_matches[:limit]
+        ]
+
+    return results

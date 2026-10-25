@@ -1,11 +1,9 @@
-import csv
 import json
 import re
 import time
 import urllib.error
 import urllib.request
-from pathlib import Path
-from typing import Any, Optional, Tuple
+from typing import Any, Optional
 
 HEADERS = {
     "User-Agent": "chess-pgn-downloader/1.0 (ChessCloneApp; contact: support@chessclone.local)",
@@ -59,8 +57,25 @@ def _get_json(url: str) -> Any:
     return None
 
 
-def get_archives(username: str) -> list[str]:
+def resolve_chess_com_username(username: str) -> str:
+    """Resolve username, stripping Elo/rating suffix (e.g. Schwoby_1200 -> schwoby) if needed."""
     clean_user = username.strip().lower()
+    url = f"https://api.chess.com/pub/player/{clean_user}/games/archives"
+    data = _get_json(url)
+    if data and isinstance(data, dict) and data.get("archives"):
+        return clean_user
+    m = re.match(r"^([a-zA-Z0-9_\-]+?)[\-_](\d{3,4})$", clean_user)
+    if m:
+        base_user = m.group(1)
+        url_base = f"https://api.chess.com/pub/player/{base_user}/games/archives"
+        data_base = _get_json(url_base)
+        if data_base and isinstance(data_base, dict) and data_base.get("archives"):
+            return base_user
+    return clean_user
+
+
+def get_archives(username: str) -> list[str]:
+    clean_user = resolve_chess_com_username(username)
     url = f"https://api.chess.com/pub/player/{clean_user}/games/archives"
     data = _get_json(url)
     if not data or not isinstance(data, dict):
@@ -75,7 +90,7 @@ def fetch_month_games(archive_url: str) -> list[dict]:
     return data.get("games", [])
 
 
-def parse_game_chunk(chunk: str, username: str, require_600: bool = True) -> Optional[dict[str, Any]]:
+def parse_game_chunk(chunk: str, username: str, require_600: bool = False) -> Optional[dict[str, Any]]:
     tags = dict(TAG_RE.findall(chunk))
     parts = re.split(r"\n\s*\n", chunk.strip(), maxsplit=1)
     movetext = parts[1].strip() if len(parts) > 1 else ""
@@ -84,6 +99,8 @@ def parse_game_chunk(chunk: str, username: str, require_600: bool = True) -> Opt
         return None
 
     time_control = str(tags.get("TimeControl", "")).strip()
+    if "/" in time_control:
+        return None
     if require_600 and not is_ten_minute_game(time_control):
         return None
 
@@ -123,8 +140,11 @@ def parse_game_chunk(chunk: str, username: str, require_600: bool = True) -> Opt
     }
 
 
-def fetch_user_games_and_save(username: str, limit: int = 60, out_csv: Optional[Path] = None) -> Tuple[Path, list[dict]]:
-    archives = get_archives(username)
+def fetch_user_games(username: str, limit: int = 60) -> list[dict]:
+    """Fetch parsed games directly in memory from Chess.com API."""
+    clean_user = username.strip().lower()
+    resolved_user = resolve_chess_com_username(clean_user)
+    archives = get_archives(resolved_user)
     if not archives:
         raise ValueError(f"No archives found for user: {username}")
 
@@ -137,26 +157,15 @@ def fetch_user_games_and_save(username: str, limit: int = 60, out_csv: Optional[
             pgn = g.get("pgn", "")
             if not pgn:
                 continue
-            parsed = parse_game_chunk(pgn, username)
+            parsed = parse_game_chunk(pgn, resolved_user)
             if parsed:
+                # Retain the requested username for downstream model mapping
+                parsed["player_id"] = clean_user
                 collected.append(parsed)
                 if len(collected) >= limit:
                     break
 
     if not collected:
-        raise ValueError(f"No valid 10-minute games found for {username}")
+        raise ValueError(f"No valid games with clock found on Chess.com for '{username}'")
 
-    if out_csv:
-        out_csv.parent.mkdir(parents=True, exist_ok=True)
-        with open(out_csv, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=list(collected[0].keys()))
-            writer.writeheader()
-            writer.writerows(collected)
-
-    return out_csv, collected
-
-
-def fetch_user_games(username: str, limit: int = 60) -> list[dict]:
-    """Fetch parsed games directly in memory without writing to disk."""
-    _, games = fetch_user_games_and_save(username, limit=limit, out_csv=None)
-    return games
+    return collected

@@ -65,9 +65,10 @@ CREATE TABLE IF NOT EXISTS models (
     weights_blob BYTEA,
     model_name VARCHAR(64) NOT NULL DEFAULT 'clone',
     style_description TEXT,
-    embedding vector(2048),
+    embedding vector,
     val_accuracy REAL CHECK (val_accuracy IS NULL OR (val_accuracy >= 0.0 AND val_accuracy <= 1.0)),
     val_loss REAL CHECK (val_loss IS NULL OR val_loss >= 0.0),
+    chess_elo INT CHECK (chess_elo IS NULL OR chess_elo >= 0),
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -95,7 +96,7 @@ CREATE TABLE IF NOT EXISTS analyzed_games (
     user_id VARCHAR(64) NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
     game_id VARCHAR(128) NOT NULL REFERENCES games(game_id) ON DELETE CASCADE,
     narrative TEXT,
-    embedding vector(2048),
+    embedding vector,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT uq_analyzed_user_game UNIQUE (user_id, game_id)
 );
@@ -141,6 +142,11 @@ SELECT
     m.style_description,
     m.val_accuracy,
     m.val_loss,
+    COALESCE(
+        m.chess_elo,
+        (SELECT g.opponent_elo FROM games g WHERE LOWER(TRIM(g.opponent_username)) = LOWER(TRIM(m.player_id)) AND g.opponent_elo IS NOT NULL AND g.opponent_elo > 0 ORDER BY g.date DESC, g.id DESC LIMIT 1),
+        (SELECT g.player_elo FROM games g WHERE LOWER(TRIM(g.player_id)) = LOWER(TRIM(m.player_id)) AND g.player_elo IS NOT NULL AND g.player_elo > 0 ORDER BY g.date DESC, g.id DESC LIMIT 1)
+    ) AS chess_elo,
     COALESCE(stats.access_count, 0) AS access_count,
     stats.last_accessed_at,
     m.created_at,
@@ -175,3 +181,12 @@ CREATE TRIGGER trg_models_updated_at
 BEFORE UPDATE ON models
 FOR EACH ROW
 EXECUTE FUNCTION set_updated_at_column();
+
+-- Ensure vector columns are unconstrained to support any embedding dimensions (2048 Gemma 1 / 2304 Gemma 2)
+DO $$
+BEGIN
+    ALTER TABLE models ALTER COLUMN embedding TYPE vector;
+    ALTER TABLE analyzed_games ALTER COLUMN embedding TYPE vector;
+EXCEPTION
+    WHEN OTHERS THEN NULL;
+END $$;

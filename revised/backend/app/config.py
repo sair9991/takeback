@@ -42,6 +42,7 @@ class Settings:
     OLLAMA_URL: str = os.getenv("OLLAMA_URL", "")
     GEMMA_MODEL_ID: str = os.getenv("GEMMA_MODEL_ID", "gemma2:2b")
     GEMMA_API_URL: str = os.getenv("GEMMA_API_URL", "http://gemma:8080")
+    GEMMA_TIMEOUT: float = float(os.getenv("GEMMA_TIMEOUT", "60.0"))
 
     DEFAULT_DEVICE: str = os.getenv("DEFAULT_DEVICE", "cpu")
 

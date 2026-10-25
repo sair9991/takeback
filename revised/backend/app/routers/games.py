@@ -37,18 +37,27 @@ def get_game_detail(game_id: str, background_tasks: BackgroundTasks):
     commentary = []
     narrative = ""
     tags = []
-    is_generating = False
+    has_valid_commentary = False
     gemma_error = None
 
     if cached_analysis and (cached_analysis.get("commentary") or cached_analysis.get("narrative")):
+        narrative_text = cached_analysis.get("narrative") or ""
+        is_bland = any(p in narrative_text.lower() for p in ["10-minute game between", "10-minute rapid game played by"])
         c = cached_analysis.get("commentary") or []
-        commentary = c if isinstance(c, list) else (json.loads(c) if isinstance(c, str) else [])
-        narrative = cached_analysis.get("narrative") or ""
-        tags = cached_analysis.get("narrative_tags") or []
-    else:
-        # Asynchronously generate commentary in an independent background thread
-        is_generating = True
-        commentary_service.start_background_commentary_generation(actual_gid, game.get("player_id"))
+        parsed_c = c if isinstance(c, list) else (json.loads(c) if isinstance(c, str) else [])
+        if not is_bland:
+            commentary = parsed_c
+            narrative = narrative_text
+            tags = cached_analysis.get("narrative_tags") or []
+            has_valid_commentary = True
+
+    is_generating = commentary_service.is_generation_in_progress(actual_gid)
+    if not has_valid_commentary:
+        if not is_generating:
+            is_generating = True
+            commentary_service.start_background_commentary_generation(actual_gid, game.get("player_id"))
+        else:
+            is_generating = True
 
     formatted = game_repo.format_game_row(game)
     return GameDetailResponse(

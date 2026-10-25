@@ -79,46 +79,66 @@ def _clean_and_parse_json(raw: str) -> Optional[dict]:
     return None
 
 
-def _query_local_gemma(prompt: str, max_tokens: int = 350) -> str:
-    # 1. Try OpenAI-compatible server (llama.cpp server container or vLLM)
+def _query_local_gemma(prompt: str, max_tokens: int = 550) -> str:
+    """Query local Gemma model with robust timeout and multi-endpoint fallback (OpenAI, llama.cpp native, Ollama)."""
+    timeout_sec = getattr(settings, "GEMMA_TIMEOUT", 60.0)
+
+    # 1. Try OpenAI-compatible server (llama.cpp server or vLLM)
     if settings.GEMMA_API_URL:
+        api_url = settings.GEMMA_API_URL.rstrip("/")
+        # Try /v1/chat/completions first
         req_data = json.dumps({
             "messages": [
-                {"role": "system", "content": "You are a concise chess coach. Always respond in valid JSON."},
+                {"role": "system", "content": "You are a master chess coach. Respond ONLY in valid JSON."},
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0.2,
             "max_tokens": max_tokens,
-            "response_format": {"type": "json_object"},
         }).encode("utf-8")
         req = urllib.request.Request(
-            f"{settings.GEMMA_API_URL.rstrip('/')}/v1/chat/completions",
+            f"{api_url}/v1/chat/completions",
             data=req_data,
             headers={"Content-Type": "application/json"},
         )
-        for attempt in range(4):
-            try:
-                with urllib.request.urlopen(req, timeout=60) as response:
-                    if response.status == 200:
-                        res = json.loads(response.read().decode("utf-8"))
-                        content = res["choices"][0]["message"]["content"]
-                        if content:
-                            return content
-                break
-            except urllib.error.URLError as e:
-                err_str = str(e)
-                if ("Connection refused" in err_str or "111" in err_str) and attempt < 3:
-                    logger.info("Gemma server initializing, retrying in 4s (attempt %d/4)...", attempt + 1)
-                    time.sleep(4)
-                    continue
-                logger.warning("llama.cpp server request failed: %s", e)
-                break
-            except Exception as e:
-                logger.warning("llama.cpp server request failed: %s", e)
-                break
+        try:
+            with urllib.request.urlopen(req, timeout=timeout_sec) as response:
+                if response.status == 200:
+                    res = json.loads(response.read().decode("utf-8"))
+                    content = res.get("choices", [{}])[0].get("message", {}).get("content")
+                    if content:
+                        return content
+        except Exception as e:
+            logger.debug("Gemma chat/completions skipped (%s): %s", api_url, e)
 
-    # 2. Try Ollama generate endpoint as fallback
-    if settings.OLLAMA_URL:
+        # Fallback to native llama.cpp /completion endpoint
+        try:
+            native_data = json.dumps({
+                "prompt": f"<start_of_turn>user\nYou are a master chess coach. Respond ONLY in valid JSON.\n{prompt}<end_of_turn>\n<start_of_turn>model\n",
+                "temperature": 0.2,
+                "n_predict": max_tokens,
+            }).encode("utf-8")
+            native_req = urllib.request.Request(
+                f"{api_url}/completion",
+                data=native_data,
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(native_req, timeout=timeout_sec) as response:
+                if response.status == 200:
+                    res = json.loads(response.read().decode("utf-8"))
+                    content = res.get("content")
+                    if content:
+                        return content
+        except Exception as e:
+            logger.debug("llama.cpp native /completion skipped: %s", e)
+
+    # 2. Try Ollama generate/chat endpoint as fallback
+    ollama_candidates = [settings.OLLAMA_URL] if settings.OLLAMA_URL else []
+    if "http://localhost:11434" not in ollama_candidates and "http://127.0.0.1:11434" not in ollama_candidates:
+        ollama_candidates.append("http://localhost:11434")
+
+    for o_url in ollama_candidates:
+        if not o_url:
+            continue
         try:
             req_data = json.dumps({
                 "model": settings.GEMMA_MODEL_ID,
@@ -127,22 +147,20 @@ def _query_local_gemma(prompt: str, max_tokens: int = 350) -> str:
                 "format": "json",
             }).encode("utf-8")
             req = urllib.request.Request(
-                f"{settings.OLLAMA_URL.rstrip('/')}/api/generate",
+                f"{o_url.rstrip('/')}/api/generate",
                 data=req_data,
                 headers={"Content-Type": "application/json"},
             )
-            with urllib.request.urlopen(req, timeout=60) as response:
+            with urllib.request.urlopen(req, timeout=timeout_sec) as response:
                 if response.status == 200:
                     res = json.loads(response.read().decode("utf-8"))
                     resp = res.get("response")
                     if resp:
                         return resp
         except Exception as e:
-            logger.warning("Ollama request failed: %s", e)
+            logger.debug("Ollama request skipped for %s: %s", o_url, e)
 
-    raise RuntimeError(
-        f"Gemma model endpoint unreachable at {settings.GEMMA_API_URL or settings.OLLAMA_URL}"
-    )
+    return ""
 
 
 def generate_structured_commentary(game: dict, moves: List[dict], odds: List[float]) -> Tuple[List[dict], dict]:
@@ -165,29 +183,48 @@ def generate_structured_commentary(game: dict, moves: List[dict], odds: List[flo
             "diff": diff,
         })
 
-    # Pick top pivotal turning points plus opening to keep prompt compact and prevent context overflow
+    # Pick opening plies, top decisive swings, and the conclusion
     sorted_by_swing = sorted(swings, key=lambda s: abs(s["diff"]), reverse=True)
-    pivotal_plies = [s["ply"] for s in sorted_by_swing[:4]]
-    pivotal_plies.extend([1, 2])
-    key_swings = [s for s in swings if s["ply"] in set(pivotal_plies)][:6]
+    key_plies = set()
+    # Add opening
+    if len(moves) >= 1:
+        key_plies.add(1)
+    if len(moves) >= 2:
+        key_plies.add(2)
+    # Add top 4 critical evaluation swings
+    for s in sorted_by_swing[:4]:
+        key_plies.add(s["ply"])
+    # Add endgame / final move
+    if len(moves) >= 4:
+        key_plies.add(len(moves))
+
+    key_swings = [s for s in swings if s["ply"] in key_plies]
+    key_swings.sort(key=lambda s: s["ply"])
+
     key_swings_str = "; ".join(
-        f"ply {s['ply']} ({s['side']} {s['move']}): odds {s['odds']:.0f}% (swing {s['diff']:+.0f}%)"
+        f"ply {s['ply']} ({s['side']} {s['move']}): player win-odds {s['odds']:.0f}% (swing {s['diff']:+.0f}%)"
         for s in key_swings
     )
 
-    top_ply = sorted_by_swing[0]["ply"] if sorted_by_swing else 1
-    prompt = f"""You are a master chess coach analyzing {player} ({color}) vs {opp} ({opp_color}). Result: {result}.
-Moves: {len(moves)}. Key moments: {key_swings_str}.
+    prompt = f"""You are a master chess coach analyzing a match between {player} ({color}) and {opp} ({opp_color}). Result: {result}.
+Total plies: {len(moves)}.
+Key moments from engine evaluation:
+{key_swings_str}
 
-Respond in valid JSON with:
-1. "narrative": 2 concise coaching sentences summarizing the opening and decisive turning point.
-2. "tags": 3 string tags (e.g. ["French Defense", "Tactical Blunder", "Endgame Conversion"]).
-3. "commentary": [
-     {{"ply": {top_ply}, "phase": "Pivotal Moment", "headline": "Key Turning Point", "text": "Coach advice for this critical position", "isPivotal": true, "pivotalLabel": "Turning Point"}}
-   ]
+Analyze this game and return valid JSON with:
+1. "narrative": 2-3 concise, engaging coaching sentences summarizing the opening, key decisive turning points, and match conclusion.
+2. "tags": 3-5 tags (e.g. ["Italian Game", "Tactical Blunder", "Kingside Attack", "Endgame Conversion"]).
+3. "commentary": A list of commentary objects covering each of the key plies mentioned above.
+Each object must have:
+- "ply": integer ply number (1-indexed)
+- "phase": string ("Opening", "Middlegame", "Tactical Turn", "Blunder", or "Endgame")
+- "headline": punchy catchphrase (3-6 words)
+- "text": 1-2 coaching sentences explaining the position, mistakes, and tactical ideas
+- "isPivotal": boolean (true for major turning points / swings >= 15%)
+- "pivotalLabel": string ("Blunder", "Turning Point", "Missed Win", "Brilliant Move", or "Critical Position")
 """
 
-    raw_response = _query_local_gemma(prompt, max_tokens=550)
+    raw_response = _query_local_gemma(prompt, max_tokens=700)
     parsed = _clean_and_parse_json(raw_response)
 
     if parsed and isinstance(parsed, dict):
@@ -196,38 +233,95 @@ Respond in valid JSON with:
             commentary = [commentary] if isinstance(commentary, dict) else []
         narrative = parsed.get("narrative", "")
         tags = parsed.get("tags", [])
-        if not commentary and key_swings:
-            top_s = key_swings[0]
-            commentary = [{
-                "ply": top_s["ply"],
-                "phase": "Pivotal Moment",
-                "headline": f"Decisive Shift on Move {top_s['ply']}",
-                "text": narrative or f"Win-odds swung by {top_s['diff']:+.0f}% after {top_s['side']} played {top_s['move']}.",
-                "isPivotal": True,
-                "pivotalLabel": "Critical Position"
-            }]
-        return commentary, {
-            "narrative": narrative or f"10-minute game between {player} and {opp}.",
-            "tags": tags if isinstance(tags, list) else ["10-Min Rapid"],
-        }
 
-    # Clean fallback extraction from raw text without failing
-    clean_text = raw_response.strip().replace("```json", "").replace("```", "").strip()
+        # Validate commentary items
+        valid_commentary = []
+        for c in commentary:
+            if isinstance(c, dict) and "ply" in c:
+                valid_commentary.append({
+                    "ply": int(c["ply"]),
+                    "phase": str(c.get("phase") or "Analysis"),
+                    "headline": str(c.get("headline") or f"Move {c['ply']}"),
+                    "text": str(c.get("text") or ""),
+                    "isPivotal": bool(c.get("isPivotal") or c.get("is_pivotal")),
+                    "pivotalLabel": str(c.get("pivotalLabel") or c.get("pivotal_label") or "Turning Point"),
+                    "pivotalId": f"moment-{c['ply']}",
+                })
+
+        if valid_commentary:
+            return valid_commentary, {
+                "narrative": narrative or f"Match between {player} ({color}) and {opp} ({opp_color}), concluding in {result}.",
+                "tags": tags if isinstance(tags, list) and tags else ["Analyzed Game", "Gemma Coach"],
+            }
+
+    # Rich, structured fallback across all key moments if LLM response was unavailable
     fallback_commentary = []
-    if key_swings:
-        top_s = key_swings[0]
-        fallback_commentary = [{
-            "ply": top_s["ply"],
-            "phase": "Pivotal Moment",
-            "headline": f"Decisive Shift on Move {top_s['ply']}",
-            "text": clean_text[:250] if clean_text else f"Win-odds shifted by {top_s['diff']:+.0f}% after {top_s['side']} played {top_s['move']}.",
-            "isPivotal": True,
-            "pivotalLabel": "Critical Position"
-        }]
+    # 1. Opening moment
+    if len(moves) >= 2:
+        m1 = moves[0]["move"]
+        m2 = moves[1]["move"]
+        fallback_commentary.append({
+            "ply": 2,
+            "phase": "Opening",
+            "headline": f"Opening Phase ({m1} / {m2})",
+            "text": f"Both {player} and {opp} contest the center early with {m1} and {m2}, setting the initial pawn structure.",
+            "isPivotal": False,
+            "pivotalLabel": "Opening",
+            "pivotalId": "moment-2",
+        })
+
+    # 2. Critical swings
+    for s in sorted_by_swing[:3]:
+        swing_val = abs(s["diff"])
+        if swing_val >= 18:
+            is_blunder = s["diff"] < 0
+            label = "Blunder" if is_blunder else "Decisive Advantage"
+            headline = f"Major Turning Point on Move {s['ply']}"
+            text = f"Win-odds shifted by {s['diff']:+.0f}% after {s['side']} played {s['move']}. A critical turning point in the game."
+        elif swing_val >= 8:
+            label = "Inaccuracy"
+            headline = f"Tactical Shift on Move {s['ply']}"
+            text = f"Evaluation shifted by {s['diff']:+.0f}% after {s['side']} played {s['move']}."
+        else:
+            continue
+
+        fallback_commentary.append({
+            "ply": s["ply"],
+            "phase": "Tactical Turn" if swing_val < 18 else "Critical Moment",
+            "headline": headline,
+            "text": text,
+            "isPivotal": swing_val >= 15,
+            "pivotalLabel": label,
+            "pivotalId": f"moment-{s['ply']}",
+        })
+
+    # 3. Final move / conclusion
+    if len(moves) >= 4 and len(moves) not in [c["ply"] for c in fallback_commentary]:
+        last_m = moves[-1]
+        fallback_commentary.append({
+            "ply": len(moves),
+            "phase": "Endgame",
+            "headline": f"Game Finish: {result.capitalize()}",
+            "text": f"Match concluded after {len(moves)} plies with result '{result}'.",
+            "isPivotal": False,
+            "pivotalLabel": "Result",
+            "pivotalId": f"moment-{len(moves)}",
+        })
+
+    fallback_commentary.sort(key=lambda c: c["ply"])
+
+    top_s = sorted_by_swing[0] if sorted_by_swing else None
+    if top_s and abs(top_s["diff"]) >= 15:
+        summary_narrative = (
+            f"{player} ({color}) faced {opp} ({opp_color}) ending in {result}. "
+            f"The game swung decisively on ply {top_s['ply']} ({top_s['side']} {top_s['move']}) with a {top_s['diff']:+.0f}% shift."
+        )
+    else:
+        summary_narrative = f"A hard-fought {len(moves)}-ply match between {player} and {opp}, concluding with {result}."
 
     return fallback_commentary, {
-        "narrative": clean_text[:350] if clean_text else f"10-minute rapid game played by {player} vs {opp}.",
-        "tags": ["10-Min Rapid", "Analyzed Match"],
+        "narrative": summary_narrative,
+        "tags": ["Analyzed Match", f"{color} vs {opp_color}", "Pivotal Moments"],
     }
 
 
@@ -269,13 +363,16 @@ def get_or_generate_commentary(game_id: str, username: Optional[str] = None) -> 
     cached = analysis_repo.get_analysis_by_game(game_id, username)
     if cached and cached.get("commentary") and cached.get("narrative"):
         c = cached["commentary"] if isinstance(cached["commentary"], list) else json.loads(cached["commentary"])
-        tags = cached.get("narrative_tags") or []
-        if isinstance(tags, str):
-            try:
-                tags = json.loads(tags)
-            except Exception:
-                tags = []
-        return c, {"narrative": cached.get("narrative", ""), "tags": tags}
+        narrative_text = cached.get("narrative", "")
+        is_bland = any(p in narrative_text.lower() for p in ["10-minute game between", "10-minute rapid game played by"])
+        if not is_bland:
+            tags = cached.get("narrative_tags") or []
+            if isinstance(tags, str):
+                try:
+                    tags = json.loads(tags)
+                except Exception:
+                    tags = []
+            return c, {"narrative": narrative_text, "tags": tags}
 
     game = game_repo.get_game_by_id(game_id)
     if not game:
@@ -318,7 +415,7 @@ def get_or_generate_commentary(game_id: str, username: Optional[str] = None) -> 
 
 
 def describe_clone_style(player_id: str, refresh: bool = False) -> dict:
-    """Generate or retrieve clone playing style profile using Gemma."""
+    """Generate or retrieve clone playing style profile using Gemma or dynamic game analysis."""
     from app.db.repositories import model_repo
 
     opp_clean = player_id.lower().strip()
@@ -326,12 +423,18 @@ def describe_clone_style(player_id: str, refresh: bool = False) -> dict:
     if not refresh:
         stats = model_repo.get_model_stats(opp_clean)
         if stats and stats.get("style_description"):
-            return {
-                "player_id": opp_clean,
-                "style_description": stats["style_description"],
-                "traits": ["Personalized Clone"],
-                "cached": True,
-            }
+            existing = stats["style_description"]
+            is_bland = any(
+                p in existing.lower()
+                for p in ["adaptive neural chess clone", "trained on personal games"]
+            )
+            if not is_bland:
+                return {
+                    "player_id": opp_clean,
+                    "style_description": existing,
+                    "traits": ["Personalized Clone"],
+                    "cached": True,
+                }
 
     metrics = model_repo.get_clone_game_metrics(opp_clean)
     sample_games = metrics.get("sample_games", [])
@@ -364,14 +467,37 @@ Return valid JSON with:
                 style_desc = raw_resp.strip().replace("```json", "").replace("```", "").strip()[:250]
                 traits = ["Dynamic Playstyle", "Adaptive", "Trained Clone"]
     except Exception as e:
-        logger.warning("Gemma style generation failed for %s: %s", opp_clean, e)
+        logger.debug("Gemma style generation skipped for %s: %s", opp_clean, e)
 
     if not style_desc:
-        speed_tag = "rapid tactician" if avg_think < 2.0 else "deliberate positional grinder"
-        style_desc = (
-            f"{player_id.capitalize()} plays as a {speed_tag}, averaging {avg_think}s per move. "
-            f"Known for sharp counter-play and practical decision-making in competitive positions."
-        )
+        display_name = player_id.capitalize()
+        total_games = len(sample_games)
+        wins = sum(1 for g in sample_games if g.get("result") in ("win", "1-0"))
+        win_rate = int(round((wins / total_games) * 100)) if total_games > 0 else None
+
+        if avg_think < 1.4:
+            speed_tag = "lightning-fast blitzer"
+            tempo_desc = f"moving in an average of {avg_think}s per ply to pressure the clock"
+        elif avg_think < 2.2:
+            speed_tag = "rapid tactical striker"
+            tempo_desc = f"averaging {avg_think}s per move with swift calculation"
+        else:
+            speed_tag = "deliberate positional grinder"
+            tempo_desc = f"investing {avg_think}s per move to find deep defensive resources"
+
+        tags = metrics.get("sample_tags", [])
+        tactical_tag = tags[0] if tags else "sharp counter-play"
+
+        if win_rate is not None and total_games >= 3:
+            style_desc = (
+                f"{display_name} plays as a {speed_tag}, {tempo_desc} with a {win_rate}% win rate across recent matches. "
+                f"Known for {tactical_tag.lower()} and clinical conversion in high-stakes positions."
+            )
+        else:
+            style_desc = (
+                f"{display_name} plays as a {speed_tag}, {tempo_desc}. "
+                f"Specializes in dynamic piece coordination, proactive opening initiative, and sharp {tactical_tag.lower()}."
+            )
         traits = ["Sharp Counter-Play", "Dynamic Move Selection", f"Avg {avg_think}s Think"]
 
     # Update model style immediately in PostgreSQL
