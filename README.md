@@ -1,0 +1,20 @@
+## Inspiration
+Ever played a chess game where you're playing beautifully, then BAM! You've blundered, you lose, and you know exactly what you could have done instead to keep your momentum. Introducing takeback, a tool that allow users to replay their past games with an AI clone of themselves acting as their opponent.
+
+## What it does
+takeback focuses on simulating how real players play, through their tendencies and pacing. An AI clone of you plays as your opponent, allowing you to replay your moves within the game. Users can analyze their past games move by move, with game commentary from gemma in 'analyze' mode. takeback allows users to sign in with their chess.com usernames, connecting their gameplay data to the application. From there, our clone model trains against Maia's move probability of the users' games, and scores the likelihood of the moves the user plays, taking into account their tendencies, pacing, consistent tactics, and other components of their game to imbibe their style. Soon after users put in their chess.com username to takeback, they have a trained clone model they can play against, analyzing their mistakes and improving their gameplay.
+
+## How we built it
+takeback was built with chess players of all skill levels in mind. We wanted to curate the experience for in-game analysis in an clean easy to use UI that is supported by cutting edge tech through the Maia version 3 chess model and our own custom-built MLP model for extracting user tendencies and pacing to build their clone. The model works by training on snapshots of each move in a game, understand the board and player positions, the time players take for their moves, and likely next moves, training on the moves the user makes. Over hundreds of games, the model imbibes the player's tendencies and chess persona. We used a custom build MLP machine learning model to create takeback since other models either required much more data for similar performance, or were not effective for our cloning initiative. The application was built using typescript, svelte for clean, efficient frontend development, and a sqlite database with a FASTAPI server for a robust database. Docker was used to allow anybody to use and run our open-source software easily, running a virtual machine which starts up the backend, frontend, and models with just one command.
+
+## Challenges we ran into
+Our main challenge was ensuring our clone model could really help chess players in analyzing their blunders. We weighed the pros and cons of using different model architectures, such as LoRA models or having averaged outputs from a random forest model, before finally deciding on the MLP model for our chess clone. Integrating our model to the application, specifically the backend required rigorous testing and improvements before the user could smoothly analyze their performance by playing their clone.
+
+## Accomplishments that we're proud of
+We are proud of creating the clone that outperforms the baseline Maia model with an accuracy of around 60%. Our application also supports the game data of many users, storing games of different types, including rapid and blitz games. takeback's analysis mode came out how we envisioned it, allowing the user to see in real time the right moves they could have made to win, along with the reasoning of their clone opponent all supported by gemma's commentary.
+
+## What we learned
+You can create a chess clone! We learned how an MLP model works in the context of our problem, how to create efficient model architectures, and how to think about defining an ML pipeline and system. Our team also learned about various process of building an end to end AI application, through parsing PGNs from chess.com, to integrating an AI model that could do more than just a simple chatbot.
+
+## What's next for takeback
+We want to bring our application to more users, chess player of all skill levels. We aim to grow and scale our application to handle hundreds of games for hundreds of users, streamlining our model training, and data pipelines while ensuring our application remains working for a high load.
