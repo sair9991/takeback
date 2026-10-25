@@ -18,6 +18,46 @@
   let realNarrative = $state<string>('');
   let backendError = $state<string | null>(null);
   let isLoadingGame = $state(true);
+  let isCommentaryLoading = $state(false);
+  let pollInterval: ReturnType<typeof setInterval> | null = null;
+
+  onDestroy(() => {
+    if (pollInterval) {
+      clearInterval(pollInterval);
+      pollInterval = null;
+    }
+  });
+
+  function startCommentaryPolling() {
+    if (pollInterval) return;
+    isCommentaryLoading = true;
+    let attempts = 0;
+    pollInterval = setInterval(async () => {
+      attempts++;
+      if (attempts > 25) {
+        if (pollInterval) clearInterval(pollInterval);
+        pollInterval = null;
+        isCommentaryLoading = false;
+        return;
+      }
+      try {
+        const update = await fetchGameDetail(gameId);
+        if ((update.commentary && update.commentary.length > 0) || update.narrative) {
+          if (update.commentary && update.commentary.length > 0) {
+            realCommentary = update.commentary;
+          }
+          if (update.narrative) {
+            realNarrative = update.narrative;
+          }
+          isCommentaryLoading = false;
+          if (pollInterval) clearInterval(pollInterval);
+          pollInterval = null;
+        }
+      } catch (e) {
+        // continue polling until timeout
+      }
+    }, 2000);
+  }
 
   const currentGame = $derived(
     activeGame || {
@@ -61,6 +101,9 @@
         }
         if (detail.narrative) {
           realNarrative = detail.narrative;
+        }
+        if (detail.is_generating || (realCommentary.length === 0 && !realNarrative)) {
+          startCommentaryPolling();
         }
       } finally {
         isLoadingGame = false;
@@ -307,6 +350,13 @@
         text: backendError,
         isPivotal: true,
         pivotalLabel: 'Error'
+      };
+    }
+    if (isCommentaryLoading) {
+      return {
+        phase: 'Analyzing',
+        headline: 'Gemma Coaching Commentary Generating...',
+        text: 'Analyzing key turning points, blunder checks, and opening strategy with local Gemma AI...'
       };
     }
     if (realCommentary.length > 0) {
@@ -846,10 +896,15 @@
           <!-- Row 3: Live Commentary Text Box -->
           <div class="widget_box full_width_widget commentary_widget_box">
             <h3 class="widget_heading">Commentary</h3>
-            <div class="commentary_card {gameCommentary.isPivotal ? 'pivotal_moment_card' : ''}">
+            <div class="commentary_card {gameCommentary.isPivotal ? 'pivotal_moment_card' : ''} {isCommentaryLoading ? 'commentary_generating_card' : ''}">
               <div class="commentary_header">
                 <div class="commentary_badge_group">
-                  <span class="commentary_phase_badge">{gameCommentary.phase}</span>
+                  <span class="commentary_phase_badge {isCommentaryLoading ? 'generating_phase' : ''}">
+                    {#if isCommentaryLoading}
+                      <span class="small_spinner"></span>
+                    {/if}
+                    {gameCommentary.phase}
+                  </span>
                   {#if currentMoveIndex >= 0}
                     <span class="commentary_move_badge">
                       Move {Math.floor(currentMoveIndex / 2) + 1}{currentMoveIndex % 2 === 0 ? '.' : '...'} {samplePgnMoves[currentMoveIndex]}
@@ -857,7 +912,12 @@
                   {/if}
                 </div>
                 <div class="commentary_live_indicator">
-                  {#if gameCommentary.isPivotal}
+                  {#if isCommentaryLoading}
+                    <span class="generating_badge">
+                      <span class="pulse_sparkle">✦</span>
+                      <span>AI Generating</span>
+                    </span>
+                  {:else if gameCommentary.isPivotal}
                     <span class="commentary_pivotal_badge">
                       ⚡ Pivotal Moment
                     </span>
@@ -868,8 +928,14 @@
                 </div>
               </div>
 
-              <h4 class="commentary_headline">{gameCommentary.headline}</h4>
-              <p class="commentary_text">{gameCommentary.text}</p>
+              <h4 class="commentary_headline">
+                {#if isCommentaryLoading}
+                  <span class="shimmer_headline">{gameCommentary.headline}</span>
+                {:else}
+                  {gameCommentary.headline}
+                {/if}
+              </h4>
+              <p class="commentary_text {isCommentaryLoading ? 'generating_text' : ''}">{gameCommentary.text}</p>
             </div>
           </div>
         </div>
@@ -1751,6 +1817,76 @@
   .commentary_card.pivotal_moment_card {
     border-left: 4px solid var(--accent-1, #e8590c);
     box-shadow: 0 2px 10px rgba(232, 89, 12, 0.15);
+  }
+
+  .commentary_card.commentary_generating_card {
+    border: 1.5px solid rgba(139, 92, 246, 0.4);
+    background: linear-gradient(135deg, rgba(245, 243, 255, 0.85) 0%, rgba(255, 255, 255, 0.98) 100%);
+    box-shadow: 0 4px 18px rgba(139, 92, 246, 0.08);
+  }
+
+  .generating_phase {
+    background: #ede9fe !important;
+    color: #6d28d9 !important;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .small_spinner {
+    width: 10px;
+    height: 10px;
+    border: 2px solid rgba(109, 40, 217, 0.25);
+    border-top-color: #6d28d9;
+    border-radius: 50%;
+    animation: spin-commentary 0.8s linear infinite;
+    display: inline-block;
+  }
+
+  .generating_badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px;
+    border-radius: 12px;
+    background: #f5f3ff;
+    color: #7c3aed;
+    font-size: 11px;
+    font-weight: 700;
+    border: 1px solid #ddd6fe;
+  }
+
+  .pulse_sparkle {
+    display: inline-block;
+    animation: pulse-sparkle 1.4s ease-in-out infinite;
+    color: #8b5cf6;
+  }
+
+  .shimmer_headline {
+    background: linear-gradient(90deg, #4c1d95 0%, #7c3aed 50%, #4c1d95 100%);
+    background-size: 200% auto;
+    color: transparent;
+    -webkit-background-clip: text;
+    background-clip: text;
+    animation: shimmer-text 2s linear infinite;
+  }
+
+  .generating_text {
+    color: #6b7280;
+    font-style: italic;
+  }
+
+  @keyframes spin-commentary {
+    to { transform: rotate(360deg); }
+  }
+
+  @keyframes pulse-sparkle {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(0.85); }
+  }
+
+  @keyframes shimmer-text {
+    to { background-position: 200% center; }
   }
 
   .commentary_pivotal_badge {

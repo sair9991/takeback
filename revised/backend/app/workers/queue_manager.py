@@ -45,7 +45,7 @@ async def worker():
             if uid and gid:
                 try:
                     await asyncio.to_thread(evaluation_service.get_or_calculate_odds, gid, uid)
-                    await asyncio.to_thread(commentary_service.get_or_generate_commentary, gid, uid)
+                    commentary_service.start_background_commentary_generation(gid, uid)
                 except Exception as e:
                     print(f"[Worker] Error pre-caching analysis for {gid}: {e}")
 

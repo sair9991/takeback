@@ -64,6 +64,7 @@ services:
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
     ports:
       - "8000:8000"
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir app
     volumes:
       - ./backend:/app
       - ./models:/app/models
@@ -83,6 +84,8 @@ services:
       - /app/node_modules
     environment:
       - VITE_API_BASE=http://localhost:8000
+      - CHOKIDAR_USEPOLLING=true
+      - WATCHPACK_POLLING=true
 
 volumes:
   postgres_data:

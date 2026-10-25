@@ -31,4 +31,5 @@ class GameDetailResponse(GameSummary):
     commentary: List[dict] = []
     narrative: str = ""
     tags: List[str] = []
+    is_generating: bool = False
     error: Optional[str] = None

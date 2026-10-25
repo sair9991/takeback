@@ -251,6 +251,7 @@ export async function fetchGameDetail(
   odds: number[];
   commentary: CommentaryMoment[];
   narrative: string;
+  is_generating?: boolean;
   error?: string;
 }> {
   try {
@@ -259,7 +260,7 @@ export async function fetchGameDetail(
     });
     if (res.ok) {
       const data = await res.json();
-      const { moves, odds, commentary, narrative, error: gemmaError, ...gameData } = data;
+      const { moves, odds, commentary, narrative, is_generating, error: gemmaError, ...gameData } = data;
       return {
         game: gameData as Game,
         moves: Array.isArray(moves) ? moves.map((m: any) => m.move) : [],
@@ -267,6 +268,7 @@ export async function fetchGameDetail(
         odds: Array.isArray(odds) ? odds : [],
         commentary: Array.isArray(commentary) ? commentary : [],
         narrative: typeof narrative === 'string' ? narrative : '',
+        is_generating: Boolean(is_generating),
         error: gemmaError || undefined
       };
     } else {

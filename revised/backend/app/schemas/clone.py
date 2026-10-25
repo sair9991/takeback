@@ -41,3 +41,5 @@ class CloneSearchResult(BaseModel):
     val_accuracy: Optional[float] = None
     access_count: int = 0
     similarity_score: Optional[float] = Field(default=None, description="Semantic match relevance score (0.0 to 1.0)")
+    chess_elo: Optional[int] = None
+    blitz_rating: Optional[int] = None

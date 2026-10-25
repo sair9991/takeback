@@ -1,4 +1,5 @@
 import type { Game } from '../types/game';
+import { getMe } from './auth';
 export type { Game };
 
 const API_BASE = 'http://localhost:8000';
@@ -21,9 +22,14 @@ export function getAnalyzedGames(): Game[] {
 /**
  * Fetches all games that the user has analyzed from the backend.
  */
-export async function fetchAnalyzedGames(username: string = 'stuffyness'): Promise<Game[]> {
+export async function fetchAnalyzedGames(username?: string): Promise<Game[]> {
   try {
-    const res = await fetch(`${API_BASE}/api/users/${username}/analyzed-games`, {
+    let handle = username?.trim();
+    if (!handle) {
+      const me = await getMe();
+      handle = me?.chess_com_username || me?.user_id || 'guest';
+    }
+    const res = await fetch(`${API_BASE}/api/users/${encodeURIComponent(handle)}/analyzed-games`, {
       credentials: 'include',
     });
     if (res.ok) {
@@ -43,15 +49,20 @@ export async function fetchAnalyzedGames(username: string = 'stuffyness'): Promi
  */
 export async function searchSemanticAnalyzedGames(
   query: string,
-  username: string = 'stuffyness'
+  username?: string
 ): Promise<Game[]> {
   const trimmed = query.trim();
+  let handle = username?.trim();
+  if (!handle) {
+    const me = await getMe();
+    handle = me?.chess_com_username || me?.user_id || 'guest';
+  }
   if (!trimmed) {
-    return fetchAnalyzedGames(username);
+    return fetchAnalyzedGames(handle);
   }
   try {
     const res = await fetch(
-      `${API_BASE}/api/users/${username}/search-semantic?q=${encodeURIComponent(trimmed)}`,
+      `${API_BASE}/api/users/${encodeURIComponent(handle)}/search-semantic?q=${encodeURIComponent(trimmed)}`,
       { credentials: 'include' }
     );
     if (res.ok) {

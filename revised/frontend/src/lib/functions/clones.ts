@@ -2,80 +2,7 @@ import type { Clone } from '../types/clone';
 
 const API_BASE = 'http://localhost:8000';
 
-export const clonesList: Clone[] = [
-  {
-    id: 'saaketh-kesireddy',
-    name: 'Saaketh Kesireddy',
-    chessUsername: 'stuffyness',
-    lichessUsername: 'saakethk',
-    playedCount: '100+',
-    blitzRating: 1600,
-    cloneRating: 1400,
-    initials: 'SK',
-    bio: 'Aggressive tactical clone with tactical alertness and Sicilian defense.',
-    styleDescription: 'Sharp tactical attacker who favors open center games, rapid pawn advances, and dynamic counter-attacks.'
-  },
-  {
-    id: 'magnus-carlsen',
-    name: 'Magnus Carlsen',
-    chessUsername: 'magnuscarlsen',
-    lichessUsername: 'drnykterstein',
-    playedCount: '500+',
-    blitzRating: 2850,
-    cloneRating: 2820,
-    initials: 'MC',
-    bio: 'World Champion endgame master with deep strategic squeeze.',
-    styleDescription: 'Relentless strategic grinder who excels in grinding out tiny endgame edges and applying positional pressure.'
-  },
-  {
-    id: 'hikaru-nakamura',
-    name: 'Hikaru Nakamura',
-    chessUsername: 'hikaru',
-    lichessUsername: 'tsm_hikaru',
-    playedCount: '350+',
-    blitzRating: 2800,
-    cloneRating: 2790,
-    initials: 'HN',
-    bio: 'Speed demon with ruthless resourcefulness and sharp tactical strikes.',
-    styleDescription: 'Hyper-aggressive blitz specialist who thrives in chaotic, rapid positions with tactical alertness and tricky counter-play.'
-  },
-  {
-    id: 'daniel-naroditsky',
-    name: 'Daniel Naroditsky',
-    chessUsername: 'danielnaroditsky',
-    lichessUsername: 'danya',
-    playedCount: '220+',
-    blitzRating: 2650,
-    cloneRating: 2610,
-    initials: 'DN',
-    bio: 'Dynamic positional master with instructive opening knowledge.',
-    styleDescription: 'Textbook tactical master with deep theoretical preparation and principled attacking plans against king safety.'
-  },
-  {
-    id: 'fabiano-caruana',
-    name: 'Fabiano Caruana',
-    chessUsername: 'fabianocaruana',
-    lichessUsername: 'caruanachess',
-    playedCount: '180+',
-    blitzRating: 2780,
-    cloneRating: 2750,
-    initials: 'FC',
-    bio: 'Deep opening preparation and calculating machine.',
-    styleDescription: 'Concrete calculating powerhouse who plays concrete, mathematically precise candidate moves.'
-  },
-  {
-    id: 'levy-rozman',
-    name: 'GothamChess (Levy Rozman)',
-    chessUsername: 'gothamchess',
-    lichessUsername: 'gothamchess',
-    playedCount: '310+',
-    blitzRating: 2350,
-    cloneRating: 2300,
-    initials: 'GC',
-    bio: 'Aggressive opening gambits, Vienna game specialist, and tactical attacking style.',
-    styleDescription: 'Aggressive gambit aficionado who hunts early initiative, dynamic open files, and kingside mating nets.'
-  }
-];
+export const clonesList: Clone[] = [];
 
 export function getClones(query: string = ''): Clone[] {
   const trimmed = query.trim().toLowerCase();
@@ -107,34 +34,45 @@ export async function fetchClones(query: string = ''): Promise<Clone[]> {
       if (Array.isArray(data) && data.length > 0) {
         return data.map((item: any) => {
           const playerId = item.player_id || item.id || 'clone';
-          // Find matching preset clone or create dynamic representation
-          const preset = clonesList.find((c) => c.chessUsername.toLowerCase() === playerId.toLowerCase() || c.id === playerId);
-          const name = preset ? preset.name : (item.model_name && item.model_name !== 'clone' ? item.model_name : playerId.charAt(0).toUpperCase() + playerId.slice(1));
+          const name =
+            item.model_name && item.model_name !== 'clone'
+              ? item.model_name
+              : playerId.charAt(0).toUpperCase() + playerId.slice(1);
           const parts = name.split(' ');
-          const initials = preset?.initials || (parts.length >= 2 ? (parts[0][0] + parts[1][0]).toUpperCase() : name.slice(0, 2).toUpperCase());
+          const initials =
+            parts.length >= 2
+              ? (parts[0][0] + parts[1][0]).toUpperCase()
+              : name.slice(0, 2).toUpperCase();
+
+          const realRating =
+            item.chess_elo ||
+            item.blitz_rating ||
+            item.chess_rating ||
+            (item.opponent_elo ? Number(item.opponent_elo) : undefined);
 
           return {
             id: playerId,
             name: name,
             chessUsername: item.player_id || playerId,
-            lichessUsername: preset?.lichessUsername || playerId,
-            playedCount: `${item.access_count ?? preset?.playedCount ?? 0}+`,
-            blitzRating: preset?.blitzRating || 1800,
-            cloneRating: preset?.cloneRating || (item.val_accuracy ? Math.round(item.val_accuracy * 3000) : 1800),
+            lichessUsername: playerId,
+            playedCount: `${item.access_count ?? 0}+`,
+            blitzRating: realRating,
+            chessRating: realRating,
+            cloneRating: realRating,
             initials: initials,
-            bio: preset?.bio || `Neural network clone of ${name}.`,
-            styleDescription: item.style_description || preset?.styleDescription || 'Adaptive neural chess clone.',
+            bio: item.bio || `Neural network clone of ${name}.`,
+            styleDescription: item.style_description || 'Adaptive neural chess clone.',
             similarityScore: typeof item.similarity_score === 'number' ? item.similarity_score : undefined,
           };
         });
       }
+      return [];
     }
   } catch (err) {
-    console.warn('Backend clone fetch failed, using local presets:', err);
+    console.warn('Backend clone fetch failed:', err);
   }
 
-  // Fallback to local filtering
-  return getClones(query);
+  return [];
 }
 
 /**
@@ -154,8 +92,43 @@ export async function fetchCloneStyle(playerId: string): Promise<string> {
   } catch (err) {
     console.warn('Failed to fetch clone style profile:', err);
   }
-  const preset = clonesList.find((c) => c.chessUsername.toLowerCase() === playerId.toLowerCase());
-  return preset?.styleDescription || 'Dynamic neural chess clone playing with personalized opening preparation and tactical timing.';
+  return 'Dynamic neural chess clone playing with personalized opening preparation and tactical timing.';
+}
+
+/**
+ * Fetch recorded past games between the user and a specific opponent clone.
+ */
+export async function fetchClonePastGames(playerId: string, userHandle?: string): Promise<any[]> {
+  try {
+    const url = userHandle
+      ? `${API_BASE}/api/clones/${encodeURIComponent(playerId)}/past-games?user=${encodeURIComponent(userHandle)}`
+      : `${API_BASE}/api/clones/${encodeURIComponent(playerId)}/past-games`;
+    const res = await fetch(url, { credentials: 'include' });
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data)) return data;
+    }
+  } catch (err) {
+    console.warn('Failed to fetch past games against clone:', err);
+  }
+  return [];
+}
+
+/**
+ * Fetch model metadata, accuracy, and access stats for a specific opponent clone.
+ */
+export async function fetchCloneStats(playerId: string): Promise<any | null> {
+  try {
+    const res = await fetch(`${API_BASE}/api/clones/${encodeURIComponent(playerId)}/stats`, {
+      credentials: 'include',
+    });
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.warn('Failed to fetch clone model stats:', err);
+  }
+  return null;
 }
 
 export interface PredictStateRequest {

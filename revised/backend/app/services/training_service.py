@@ -116,9 +116,15 @@ def train_clone_mlp(dataset_or_tensors: Union[Path, dict[str, torch.Tensor]], ou
     if best_state is None:
         best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
 
+    from app.ml.implementation import move_accuracy
+    model.load_state_dict(best_state)
+    model.eval()
+    with torch.no_grad():
+        val_acc = move_accuracy(model, val_dev[0], val_dev[1], val_dev[2], val_dev[3])
+
     torch.save(best_state, out_weights)
-    logger.info("Saved clone model checkpoint to %s", out_weights)
-    return out_weights
+    logger.info("Saved clone model checkpoint to %s (val_loss=%.4f, val_acc=%.4f)", out_weights, best_val, val_acc)
+    return out_weights, float(best_val), float(val_acc)
 
 
 def run_training_pipeline(
@@ -161,11 +167,17 @@ def run_training_pipeline(
 
     # Step 3: Train Clone MLP directly from in-memory tensors (90%)
     notify("training", 90, "Training personalized clone neural network...")
-    train_clone_mlp(tensors, final_weights)
+    _, val_loss, val_acc = train_clone_mlp(tensors, final_weights)
 
     # Step 4: Register model checkpoint in PostgreSQL models table
-    model_repo.register_model_weights(opp_clean, f"models/{opp_clean}.pt", trained_by_user_id=trained_by_user_id)
-    notify("completed", 100, f"Model for {opp} trained and cached!")
+    model_repo.register_model_weights(
+        opp_clean,
+        f"models/{opp_clean}.pt",
+        trained_by_user_id=trained_by_user_id,
+        val_accuracy=val_acc,
+        val_loss=val_loss,
+    )
+    notify("completed", 100, f"Model for {opp} trained and cached! (Loss: {val_loss:.4f}, Acc: {val_acc*100:.1f}%)")
 
     return final_weights
 

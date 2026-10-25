@@ -1,5 +1,6 @@
 from typing import List, Optional
-from fastapi import APIRouter, HTTPException, Query, Response
+import json
+from fastapi import APIRouter, HTTPException, Query, Response, BackgroundTasks
 from app.db.repositories import game_repo, analysis_repo
 from app.schemas.game import GameSummary, GameDetailResponse, MoveRecord
 from app.schemas.analysis import SemanticSearchGameResponse
@@ -14,7 +15,7 @@ def get_user_games(username: str, limit: int = 50, offset: int = 0):
 
 
 @router.get("/{game_id}", response_model=GameDetailResponse)
-def get_game_detail(game_id: str):
+def get_game_detail(game_id: str, background_tasks: BackgroundTasks):
     """Fetch game metadata along with its chronological moves, cached odds, and commentary."""
     game = game_repo.get_game_by_id(game_id)
     if not game:
@@ -31,18 +32,23 @@ def get_game_detail(game_id: str):
     except Exception as e:
         eval_error = str(e)
 
-    # Fetch cached commentary or calculate once
+    # Check if analysis is already cached in database
+    cached_analysis = analysis_repo.get_analysis_by_game(actual_gid, game.get("player_id"))
     commentary = []
     narrative = ""
     tags = []
+    is_generating = False
     gemma_error = None
-    try:
-        c, n = commentary_service.get_or_generate_commentary(actual_gid, game.get("player_id"))
-        commentary = c
-        narrative = n.get("narrative", "") if isinstance(n, dict) else str(n)
-        tags = n.get("tags", []) if isinstance(n, dict) else []
-    except Exception as e:
-        gemma_error = str(e)
+
+    if cached_analysis and (cached_analysis.get("commentary") or cached_analysis.get("narrative")):
+        c = cached_analysis.get("commentary") or []
+        commentary = c if isinstance(c, list) else (json.loads(c) if isinstance(c, str) else [])
+        narrative = cached_analysis.get("narrative") or ""
+        tags = cached_analysis.get("narrative_tags") or []
+    else:
+        # Asynchronously generate commentary in an independent background thread
+        is_generating = True
+        commentary_service.start_background_commentary_generation(actual_gid, game.get("player_id"))
 
     formatted = game_repo.format_game_row(game)
     return GameDetailResponse(
@@ -52,6 +58,7 @@ def get_game_detail(game_id: str):
         commentary=commentary,
         narrative=narrative,
         tags=tags,
+        is_generating=is_generating,
         error=gemma_error or eval_error,
     )
 

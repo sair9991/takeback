@@ -60,10 +60,39 @@ def get_user_games(player_id: str, limit: int = 50, offset: int = 0) -> list[dic
     sql = """
         SELECT * FROM games
         WHERE player_id = ANY(%s)
+          AND (time_control IN ('600', '600+0', '600+1', '600+2', '600+5') OR time_control LIKE '600+%%')
         ORDER BY date DESC, id DESC
         LIMIT %s OFFSET %s
     """
     rows = query(sql, (user_keys, limit, offset))
+    return [format_game_row(r) for r in rows]
+
+
+def get_head_to_head_games(user_key: str, opponent_name: str, limit: int = 50) -> list[dict[str, Any]]:
+    """Return all recorded games between a user and a specific opponent clone."""
+    from app.db.repositories import user_repo
+
+    target_user = (
+        user_repo.get_user_by_id(user_key)
+        or user_repo.get_user_by_chess_handle(user_key)
+    )
+    user_keys = [user_key.lower().strip()]
+    if target_user:
+        user_keys.append(target_user["user_id"].lower().strip())
+        if target_user.get("chess_com_username"):
+            user_keys.append(target_user["chess_com_username"].lower().strip())
+    user_keys = list(set(user_keys))
+
+    opp_clean = opponent_name.lower().strip()
+
+    sql = """
+        SELECT * FROM games
+        WHERE (LOWER(TRIM(player_id)) = ANY(%s) AND LOWER(TRIM(opponent_username)) = %s)
+           OR (LOWER(TRIM(player_id)) = %s AND LOWER(TRIM(opponent_username)) = ANY(%s))
+        ORDER BY date DESC, id DESC
+        LIMIT %s
+    """
+    rows = query(sql, (user_keys, opp_clean, opp_clean, user_keys, limit))
     return [format_game_row(r) for r in rows]
 
 
@@ -231,6 +260,8 @@ def sync_user_games_from_chess_com(
                     result = raw_result
                 date_str = headers.get("Date", "")
                 time_control = headers.get("TimeControl", "")
+                if not pgn_service.is_ten_minute_game(time_control):
+                    continue
 
                 moves_data = []
                 board = parsed_game.board()

@@ -25,6 +25,20 @@ def parse_clock(comment: str) -> Optional[float]:
     return round(hours * 3600 + int(m.group(2)) * 60 + float(m.group(3)), 3)
 
 
+def is_ten_minute_game(time_control: Optional[str]) -> bool:
+    """Return True if and only if time control is 10 minutes (600 seconds base)."""
+    tc = str(time_control or "").strip()
+    if tc in ("600", "600+0", "600+1", "600+2", "600+5"):
+        return True
+    base, _, inc = tc.partition("+")
+    try:
+        b = float(base)
+        i = float(inc or 0)
+        return b == 600.0 and i <= 5.0
+    except ValueError:
+        return False
+
+
 def _get_json(url: str) -> Any:
     req = urllib.request.Request(url, headers=HEADERS)
     for attempt in range(3):
@@ -61,7 +75,7 @@ def fetch_month_games(archive_url: str) -> list[dict]:
     return data.get("games", [])
 
 
-def parse_game_chunk(chunk: str, username: str, require_600: bool = False) -> Optional[dict[str, Any]]:
+def parse_game_chunk(chunk: str, username: str, require_600: bool = True) -> Optional[dict[str, Any]]:
     tags = dict(TAG_RE.findall(chunk))
     parts = re.split(r"\n\s*\n", chunk.strip(), maxsplit=1)
     movetext = parts[1].strip() if len(parts) > 1 else ""
@@ -70,7 +84,7 @@ def parse_game_chunk(chunk: str, username: str, require_600: bool = False) -> Op
         return None
 
     time_control = str(tags.get("TimeControl", "")).strip()
-    if require_600 and time_control != "600":
+    if require_600 and not is_ten_minute_game(time_control):
         return None
 
     white_raw = tags.get("White", "").strip()

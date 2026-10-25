@@ -56,6 +56,45 @@ def search_clones(
     return model_repo.search_clones_by_style(q, query_embedding=embedding, limit=limit)
 
 
+@router.post("/api/clones/{player_id}/train")
+@router.post("/api/train/{player_id}")
+def train_clone_endpoint(
+    player_id: str,
+    force: bool = Query(default=False, description="Force retraining even if model already exists"),
+    current_user: Optional[dict] = Depends(get_optional_current_user),
+) -> dict[str, Any]:
+    """Train or re-train an opponent clone model and return its model statistics (loss, accuracy, etc.)."""
+    opp_clean = player_id.lower().strip()
+    user_id = (current_user.get("user_id") if current_user else None)
+
+    # If model is already cached and not forced, return existing stats if valid
+    if not force:
+        stats = model_repo.get_model_stats(opp_clean)
+        path = model_repo.get_model_weights_path(opp_clean)
+        if stats and path and path.is_file() and stats.get("val_loss") is not None:
+            return {
+                "status": "cached",
+                "player_id": opp_clean,
+                "val_accuracy": stats.get("val_accuracy"),
+                "val_loss": stats.get("val_loss"),
+                "model_stats": stats,
+            }
+
+    try:
+        from app.services import training_service
+        training_service.run_training_pipeline(opp_clean, trained_by_user_id=user_id)
+        stats = model_repo.get_model_stats(opp_clean)
+        return {
+            "status": "completed",
+            "player_id": opp_clean,
+            "val_accuracy": stats.get("val_accuracy") if stats else None,
+            "val_loss": stats.get("val_loss") if stats else None,
+            "model_stats": stats,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Training failed: {str(e)}")
+
+
 @router.get("/api/clones/{player_id}/stats")
 def get_clone_stats(player_id: str) -> dict[str, Any]:
     """Retrieve usage stats, access counter, and timestamps for a specific model."""
@@ -63,6 +102,19 @@ def get_clone_stats(player_id: str) -> dict[str, Any]:
     if not stats:
         raise HTTPException(status_code=404, detail=f"Model for '{player_id}' not found")
     return stats
+
+
+@router.get("/api/clones/{player_id}/past-games")
+def get_clone_past_games(
+    player_id: str,
+    user: Optional[str] = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=100),
+    current_user: Optional[dict] = Depends(get_optional_current_user),
+) -> list[dict[str, Any]]:
+    """Retrieve user's recorded past games against this specific opponent clone."""
+    from app.db.repositories import game_repo
+    user_handle = (current_user.get("user_id") if current_user else None) or user or "stuffyness"
+    return game_repo.get_head_to_head_games(user_handle, player_id, limit=limit)
 
 
 @router.get("/api/clones/{player_id}/style", response_model=CloneStyleResponse)

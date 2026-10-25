@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { goto } from '$app/navigation';
   import GameCard from '../../../lib/components/GameCard.svelte';
   import NewAnalysisModal from '../../../lib/components/NewAnalysisModal.svelte';
@@ -10,16 +10,24 @@
     type Game
   } from '../../../lib/functions/analyzedGames';
   import { requestGameAnalysis } from '../../../lib/functions/userGames';
+  import { getMe } from '../../../lib/functions/auth';
 
-  let games = $state<Game[]>(getAnalyzedGames());
+  const cachedGames = getAnalyzedGames();
+  let initialGames = $state<Game[]>(cachedGames);
+  let games = $state<Game[]>(cachedGames);
   let selectedGame = $state<Game | null>(null);
   let isModalOpen = $state(false);
   let searchQuery = $state('');
   let isSearching = $state(false);
+  let isSearchExpanded = $state(false);
+  let searchInputRef = $state<HTMLInputElement | null>(null);
 
   onMount(async () => {
-    const loaded = await fetchAnalyzedGames();
+    const me = await getMe();
+    const handle = me?.chess_com_username || me?.user_id;
+    const loaded = await fetchAnalyzedGames(handle);
     if (loaded && loaded.length > 0) {
+      initialGames = loaded;
       games = loaded;
     }
   });
@@ -29,6 +37,10 @@
     const q = searchQuery.trim();
     if (!q) {
       isSearching = false;
+      // When search query is cleared or empty, immediately restore all games
+      if (initialGames.length > 0) {
+        games = initialGames;
+      }
       return;
     }
 
@@ -47,10 +59,34 @@
     return () => clearTimeout(timer);
   });
 
+  async function expandSearch() {
+    isSearchExpanded = true;
+    await tick();
+    searchInputRef?.focus();
+  }
+
+  function collapseSearch() {
+    searchQuery = '';
+    games = initialGames;
+    isSearchExpanded = false;
+  }
+
+  function handleKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      collapseSearch();
+    }
+  }
+
   async function clearSearch() {
     searchQuery = '';
-    const loaded = await fetchAnalyzedGames();
-    games = loaded || [];
+    if (initialGames.length > 0) {
+      games = initialGames;
+    } else {
+      const loaded = await fetchAnalyzedGames();
+      initialGames = loaded || [];
+      games = initialGames;
+    }
+    searchInputRef?.focus();
   }
 
   // Open modal when '+' button is clicked
@@ -61,10 +97,14 @@
   // Handle game added from modal (checks model cache, enqueues if needed & streams status)
   async function handleImportGame(game: Game) {
     try {
-      const res = await requestGameAnalysis('stuffyness', game.id, game.opponent);
+      const me = await getMe();
+      const handle = me?.chess_com_username || me?.user_id || 'guest';
+      const res = await requestGameAnalysis(handle, game.id, game.opponent);
 
       if (res.cached) {
-        games = [...games.filter((g) => g.id !== game.id), game];
+        const updated = [...initialGames.filter((g) => g.id !== game.id), game];
+        initialGames = updated;
+        games = updated;
         selectedGame = game;
         goto(`/app/analyze/${game.id}`);
       } else {
@@ -76,7 +116,9 @@
           jobId: res.job_id,
         };
 
-        games = [...games.filter((g) => g.id !== game.id), trainingGame];
+        const updated = [...initialGames.filter((g) => g.id !== game.id), trainingGame];
+        initialGames = updated;
+        games = updated;
 
         if (res.job_id) {
           const streamUrl = `http://localhost:8000/api/analysis/stream/${res.job_id}`;
@@ -92,6 +134,8 @@
                 }
                 if (data.status === 'completed') {
                   games[idx].isTraining = false;
+                  const initIdx = initialGames.findIndex((g) => g.id === game.id);
+                  if (initIdx !== -1) initialGames[initIdx].isTraining = false;
                   es.close();
                 } else if (data.status === 'failed') {
                   games[idx].trainingStatus = `Failed: ${data.message || 'Error'}`;
@@ -110,7 +154,9 @@
       }
     } catch (err) {
       console.warn('Backend unavailable, importing directly:', err);
-      games = [...games.filter((g) => g.id !== game.id), game];
+      const updated = [...initialGames.filter((g) => g.id !== game.id), game];
+      initialGames = updated;
+      games = updated;
       goto(`/app/analyze/${game.id}`);
     }
   }
@@ -125,32 +171,54 @@
 </script>
 
 <div class="analyze_container">
-  <!-- Search Bar Pill -->
-  <div class="search_pill_wrapper">
-    <input
-      type="text"
-      class="search_pill_input"
-      placeholder="Search games by opening, style, or narrative (e.g. 'Sicilian blunder', 'endgame squeeze')..."
-      bind:value={searchQuery}
-    />
-    {#if searchQuery}
-      <button
-        class="clear_search_btn"
-        onclick={clearSearch}
-        aria-label="Clear search"
-      >
-        ✕
-      </button>
-    {/if}
-  </div>
-
   <div class="section_header">
-    <h1 class="page_title">
-      {searchQuery ? `Search Results (${games.length})` : 'Your Games'}
-    </h1>
-    {#if isSearching}
-      <span class="searching_indicator">Searching embeddings...</span>
-    {/if}
+    <div class="header_title_wrap">
+      <h1 class="page_title">
+        {searchQuery ? `Search Results (${games.length})` : 'Your Games'}
+      </h1>
+    </div>
+
+    <!-- Inline Search Button / Expandable Pill -->
+    <div class="header_search_wrap {isSearchExpanded ? 'expanded' : ''}">
+      {#if !isSearchExpanded}
+        <button
+          class="search_circle_btn"
+          onclick={expandSearch}
+          aria-label="Search games"
+          title="Search games"
+        >
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+        </button>
+      {:else}
+        <div class="search_pill_wrapper">
+          <div class="search_icon_prefix">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#64748b" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="8" />
+              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+          </div>
+          <input
+            bind:this={searchInputRef}
+            type="text"
+            class="search_pill_input"
+            placeholder="Search games by opening, style, or narrative (e.g. 'Sicilian blunder', 'endgame squeeze')..."
+            bind:value={searchQuery}
+            onkeydown={handleKeydown}
+          />
+          <button
+            class="close_search_btn"
+            onclick={collapseSearch}
+            aria-label="Close search"
+            title="Close search"
+          >
+            ✕
+          </button>
+        </div>
+      {/if}
+    </div>
   </div>
 
   {#if games.length === 0 && searchQuery}
@@ -226,25 +294,117 @@
     padding: 1.5rem 2rem;
   }
 
-  /* Search Pill */
+  /* Header & Inline Search */
+  .section_header {
+    display: flex;
+    align-items: center;
+    gap: 1.25rem;
+    margin-bottom: 1.75rem;
+    min-height: 46px;
+  }
+
+  .header_title_wrap {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    flex-shrink: 0;
+  }
+
+  .page_title {
+    font-size: 26px;
+    font-weight: 700;
+    color: #000000;
+    margin: 0;
+    white-space: nowrap;
+  }
+
+  .searching_indicator {
+    font-size: 13px;
+    font-weight: 600;
+    color: #40866a;
+    background: rgba(64, 134, 106, 0.1);
+    padding: 0.3rem 0.75rem;
+    border-radius: 9999px;
+  }
+
+  .header_search_wrap {
+    display: flex;
+    align-items: center;
+    transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .header_search_wrap.expanded {
+    flex: 1;
+    max-width: 620px;
+  }
+
+  .search_circle_btn {
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    background-color: #d9d9d9;
+    border: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #334155;
+    cursor: pointer;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+    transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+
+  .search_circle_btn:hover {
+    background-color: #cecece;
+    color: #0f172a;
+    transform: scale(1.08);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  }
+
+  .search_circle_btn:active {
+    transform: scale(0.96);
+  }
+
   .search_pill_wrapper {
     position: relative;
     width: 100%;
-    max-width: 760px;
-    margin: 0.5rem auto 2.25rem auto;
+    display: flex;
+    align-items: center;
+    animation: expandInlinePill 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+
+  @keyframes expandInlinePill {
+    from {
+      opacity: 0;
+      transform: scaleX(0.92);
+    }
+    to {
+      opacity: 1;
+      transform: scaleX(1);
+    }
+  }
+
+  .search_icon_prefix {
+    position: absolute;
+    left: 1.15rem;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
   }
 
   .search_pill_input {
     width: 100%;
-    height: 54px;
+    height: 44px;
     background-color: #d9d9d9;
     border-radius: 9999px;
     border: 2px solid transparent;
-    padding: 0 3.25rem 0 1.5rem;
-    font-size: 15px;
+    padding: 0 2.75rem 0 2.75rem;
+    font-size: 14.5px;
     font-weight: 600;
     color: #1e293b;
-    text-align: center;
+    text-align: left;
     box-sizing: border-box;
     outline: none;
     transition: all 0.2s ease;
@@ -258,12 +418,12 @@
   .search_pill_input:focus {
     border-color: #40866a;
     background-color: #e2e2e2;
-    box-shadow: 0 0 0 4px rgba(64, 134, 106, 0.15);
+    box-shadow: 0 0 0 3px rgba(64, 134, 106, 0.15);
   }
 
-  .clear_search_btn {
+  .close_search_btn {
     position: absolute;
-    right: 1.25rem;
+    right: 0.85rem;
     top: 50%;
     transform: translateY(-50%);
     background: #cbd5e1;
@@ -275,38 +435,16 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 13px;
+    font-size: 12px;
     font-weight: bold;
     cursor: pointer;
-    transition: background 0.15s;
+    transition: all 0.15s ease;
   }
 
-  .clear_search_btn:hover {
+  .close_search_btn:hover {
     background: #94a3b8;
     color: #ffffff;
-  }
-
-  .section_header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 1.5rem;
-  }
-
-  .page_title {
-    font-size: 26px;
-    font-weight: 700;
-    color: #000000;
-    margin: 0;
-  }
-
-  .searching_indicator {
-    font-size: 13px;
-    font-weight: 600;
-    color: #40866a;
-    background: rgba(64, 134, 106, 0.1);
-    padding: 0.3rem 0.75rem;
-    border-radius: 9999px;
+    transform: translateY(-50%) scale(1.1);
   }
 
   .empty_search_state {

@@ -56,13 +56,18 @@ export interface AnalyzeResponse {
  * Checks if the opponent model is cached and starts sequential training if not.
  */
 export async function requestGameAnalysis(
-  username: string = 'stuffyness',
+  username: string | undefined,
   gameId: string,
   opponent?: string
 ): Promise<AnalyzeResponse> {
+  let handle = username?.trim();
+  if (!handle) {
+    const me = await getMe();
+    handle = me?.chess_com_username || me?.user_id || 'guest';
+  }
   const url = opponent
-    ? `${API_BASE}/api/users/${username}/analyze/${gameId}?opponent=${encodeURIComponent(opponent)}`
-    : `${API_BASE}/api/users/${username}/analyze/${gameId}`;
+    ? `${API_BASE}/api/users/${encodeURIComponent(handle)}/analyze/${gameId}?opponent=${encodeURIComponent(opponent)}`
+    : `${API_BASE}/api/users/${encodeURIComponent(handle)}/analyze/${gameId}`;
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

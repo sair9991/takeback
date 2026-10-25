@@ -68,7 +68,7 @@ def analyze_game(
 
     if queue_manager.is_cached(opp):
         background_tasks.add_task(evaluation_service.get_or_calculate_odds, game_id, user_id)
-        background_tasks.add_task(commentary_service.get_or_generate_commentary, game_id, user_id)
+        commentary_service.start_background_commentary_generation(game_id, user_id)
         return AnalyzeResponse(cached=True, status="ready", opponent=opp)
 
     job_id = queue_manager.enqueue(opp, user_id, game_id)
