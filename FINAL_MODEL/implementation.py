@@ -55,6 +55,33 @@ def move_accuracy(model, X, maia_logits, mask, target_idx):
         pred = scores.argmax(dim=1)
         return (pred == target_idx).float().mean().item()
 
+def split_data_by_game(tensors, train_ratio=0.8):
+    """Splits snapshots chronologically by unique game_ids to prevent data leakage."""
+    game_ids = tensors["game_ids"]
+    unique_games = list(dict.fromkeys(game_ids))
+    n_train_games = int(len(unique_games) * train_ratio)
+    train_set = set(unique_games[:n_train_games])
+
+    train_idx = torch.tensor([i for i, gid in enumerate(game_ids) if gid in train_set], dtype=torch.long)
+    val_idx = torch.tensor([i for i, gid in enumerate(game_ids) if gid not in train_set], dtype=torch.long)
+
+    train = (
+        tensors["X"][train_idx],
+        tensors["maia_logits"][train_idx],
+        tensors["mask"][train_idx],
+        tensors["target_idx"][train_idx],
+        tensors["seconds"][train_idx],
+    )
+    val = (
+        tensors["X"][val_idx],
+        tensors["maia_logits"][val_idx],
+        tensors["mask"][val_idx],
+        tensors["target_idx"][val_idx],
+        tensors["seconds"][val_idx],
+    )
+    return train, val, len(unique_games[:n_train_games]), len(unique_games[n_train_games:])
+
+
 # ---- training loop ----
 def train(dataset_file=None):
     from pathlib import Path
@@ -66,30 +93,8 @@ def train(dataset_file=None):
     if dataset_file.exists():
         print(f"Loading real Maia-3 snapshots from {dataset_file.name}...")
         tensors = torch.load(dataset_file, map_location="cpu", weights_only=False)
-        # Split 80/20 by unique game_ids to prevent data leakage
-        game_ids = tensors["game_ids"]
-        unique_games = list(dict.fromkeys(game_ids))
-        n_train_games = int(len(unique_games) * 0.8)
-        train_set = set(unique_games[:n_train_games])
-
-        train_idx = torch.tensor([i for i, gid in enumerate(game_ids) if gid in train_set], dtype=torch.long)
-        val_idx = torch.tensor([i for i, gid in enumerate(game_ids) if gid not in train_set], dtype=torch.long)
-
-        train = (
-            tensors["X"][train_idx],
-            tensors["maia_logits"][train_idx],
-            tensors["mask"][train_idx],
-            tensors["target_idx"][train_idx],
-            tensors["seconds"][train_idx],
-        )
-        val = (
-            tensors["X"][val_idx],
-            tensors["maia_logits"][val_idx],
-            tensors["mask"][val_idx],
-            tensors["target_idx"][val_idx],
-            tensors["seconds"][val_idx],
-        )
-        print(f"Loaded real dataset: {len(train[0])} train snapshots, {len(val[0])} val snapshots.")
+        train, val, n_train, n_val = split_data_by_game(tensors, train_ratio=0.8)
+        print(f"Loaded real dataset: {len(train[0])} train snapshots ({n_train} games), {len(val[0])} val snapshots ({n_val} games).")
     else:
         print("Precomputed snapshots_dataset.pt not found. Using synthetic dummy data...")
         train = make_data(13000)

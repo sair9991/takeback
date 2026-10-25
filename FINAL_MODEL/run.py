@@ -18,7 +18,7 @@ except ImportError:
     Database = None
 
 if __name__ == "__main__":
-    db = Database()
+    db = Database() if Database is not None else None
 
     if len(sys.argv) > 1:
         target = sys.argv[1].strip()
@@ -31,25 +31,26 @@ if __name__ == "__main__":
     if Path(target).is_file():
         csv = Path(target)
         player_id = csv.stem.lower()
-        db.create_or_get_user(user_id=player_id, chess_com_username=player_id)
-        db.import_games_csv(csv, src="chess.com", default_player_id=player_id)
+        if db:
+            db.create_or_get_user(user_id=player_id, chess_com_username=player_id)
+            db.import_games_csv(csv, src="chess.com", default_player_id=player_id)
     else:
         player_id = target.lower()
         # Look for local cached CSV first
         local_csv = next(
             (p for p in [
                 DIR / f"{player_id}.csv",
+                ROOT / "revised" / "backend" / f"{player_id}.csv",
                 ROOT / f"{player_id}.csv",
-                ROOT / "model_dev" / f"{player_id}.csv",
-                ROOT / "data" / f"{player_id}.csv",
             ] if p.is_file()),
             None,
         )
 
         if local_csv:
             csv = local_csv
-            db.create_or_get_user(user_id=player_id, chess_com_username=target)
-            db.import_games_csv(csv, src="chess.com", default_player_id=player_id)
+            if db:
+                db.create_or_get_user(user_id=player_id, chess_com_username=target)
+                db.import_games_csv(csv, src="chess.com", default_player_id=player_id)
         else:
             print(f"Fetching games from Chess.com for user '{target}'...")
             csv, _ = fetch_user_games_and_save(target, limit=500, out_csv=DIR / f"{player_id}.csv")
@@ -60,8 +61,9 @@ if __name__ == "__main__":
     dataset_pt = extract(str(csv), str(folder / "snapshots_with_logits.csv"), str(folder / "snapshots_dataset.pt"))
     weights = train(dataset_pt)
 
-    # 2. Save model weights keyed by user_id in the models table
-    db.save_model_weights(player_id=player_id, weights_path=weights)
-    print(f"Saved model weights for {player_id} to database models table.")
+    # 2. Save model weights keyed by user_id in the models table if db is available
+    if db:
+        db.save_model_weights(player_id=player_id, weights_path=weights)
+        print(f"Saved model weights for {player_id} to database models table.")
 
     play(weights)

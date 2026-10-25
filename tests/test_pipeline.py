@@ -18,15 +18,14 @@ import torch
 import torch.nn.functional as F
 
 ROOT = Path(__file__).resolve().parent.parent
-MODEL_DIR = ROOT / "Model"
+MODEL_DIR = ROOT / "FINAL_MODEL"
 for p in (str(ROOT), str(MODEL_DIR)):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from Model.features import compute_context_features, compute_move_features
-from Model.implementation import Clone
-from Model.snapshots import build_game_snapshots, load_rows
-from Model.service import split_data_by_game
+from FINAL_MODEL.features import compute_context_features, compute_move_features
+from FINAL_MODEL.implementation import Clone, split_data_by_game
+from FINAL_MODEL.snapshots import build_game_snapshots, load_rows
 
 
 def test_zero_offset_exact_match():
@@ -79,9 +78,9 @@ def test_feature_count():
 
 def test_clock_arithmetic():
     """In the first sample game, White's e4 took 1.2s and Black's c6 took 22.7s."""
-    csv_file = ROOT / "stuffyness.csv"
+    csv_file = ROOT / "FINAL_MODEL" / "stuffyness.csv"
     if not csv_file.is_file():
-        csv_file = ROOT / "data" / "stuffyness.csv"
+        csv_file = ROOT / "revised" / "backend" / "stuffyness.csv"
     rows = load_rows(str(csv_file))
     first_game = rows[0]
     snaps = build_game_snapshots(first_game)
