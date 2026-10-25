@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { goto } from '$app/navigation';
   import GameCard from '../../../lib/components/GameCard.svelte';
   import NewAnalysisModal from '../../../lib/components/NewAnalysisModal.svelte';
   import { getDummyGames, type Game } from '../../../lib/functions/games';
@@ -12,17 +13,19 @@
     isModalOpen = true;
   }
 
-  // Handle game added from modal (video, manual, or import)
+  // Handle game added from modal (redirects to the game analysis page)
   function handleImportGame(game: Game) {
     games = [...games, game];
     selectedGame = game;
     console.log('Added new game for analysis:', game);
+    goto(`/app/analyze/${game.id}`);
   }
 
-  // Dummy function when clicking an existing game card
+  // When clicking an existing game card, navigate to its analysis page
   function handleSelectGame(game: Game) {
     selectedGame = game;
     console.log('Selected game for analysis:', game);
+    goto(`/app/analyze/${game.id}`);
   }
 </script>
 
