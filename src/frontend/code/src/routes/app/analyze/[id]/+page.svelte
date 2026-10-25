@@ -123,7 +123,6 @@
   }
 
   let lastAcknowledgedPivotalId = $state<string | null>(null);
-  let wasPausedForPivotal = $state(false);
 
   const gameCommentary = $derived.by<CommentaryMoment>(() => {
     if (currentMoveIndex < 0) {
@@ -285,7 +284,6 @@
 
   function handleScrubberInput(e: Event) {
     stopAutoPlay();
-    wasPausedForPivotal = false;
     const target = e.currentTarget as HTMLInputElement;
     const newIndex = parseInt(target.value, 10);
     jumpToMove(newIndex);
@@ -294,7 +292,6 @@
   // Navigation controls
   function stepBackward() {
     stopAutoPlay();
-    wasPausedForPivotal = false;
     if (currentMoveIndex >= 0) {
       currentMoveIndex--;
       reconstructFenToIndex(currentMoveIndex);
@@ -306,7 +303,6 @@
 
   function stepForward() {
     stopAutoPlay();
-    wasPausedForPivotal = false;
     if (currentMoveIndex < samplePgnMoves.length - 1) {
       currentMoveIndex++;
       reconstructFenToIndex(currentMoveIndex);
@@ -316,20 +312,17 @@
   function toggleAutoPlay() {
     if (isPlaying) {
       stopAutoPlay();
-      wasPausedForPivotal = false;
     } else {
       // If we are at the end, restart from the beginning
       if (currentMoveIndex >= samplePgnMoves.length - 1) {
         currentMoveIndex = -1;
         reconstructFenToIndex(currentMoveIndex);
         lastAcknowledgedPivotalId = null;
-        wasPausedForPivotal = false;
       }
       // If resuming from a pivotal moment, acknowledge it so autoplay continues
       if (gameCommentary.isPivotal && gameCommentary.pivotalId) {
         lastAcknowledgedPivotalId = gameCommentary.pivotalId;
       }
-      wasPausedForPivotal = false;
       isPlaying = true;
       playInterval = setInterval(() => {
         if (currentMoveIndex < samplePgnMoves.length - 1) {
@@ -343,7 +336,6 @@
             gameCommentary.pivotalId !== lastAcknowledgedPivotalId
           ) {
             lastAcknowledgedPivotalId = gameCommentary.pivotalId;
-            wasPausedForPivotal = true;
             stopAutoPlay();
           }
         } else {
@@ -378,7 +370,6 @@
 
   function restartGame() {
     stopAutoPlay();
-    wasPausedForPivotal = false;
     lastAcknowledgedPivotalId = null;
     chess.reset();
     currentFen = chess.fen();
@@ -392,7 +383,6 @@
 
   function jumpToMove(targetIndex: number) {
     stopAutoPlay();
-    wasPausedForPivotal = false;
     currentMoveIndex = targetIndex;
     reconstructFenToIndex(currentMoveIndex);
     if (!gameCommentary.isPivotal) {
@@ -549,8 +539,8 @@
           <button
             class="mode_toggle_pill {gameCommentary.isPivotal ? 'pivotal_highlight' : ''}"
             onclick={() => (viewMode = 'focused')}
-            title={gameCommentary.isPivotal ? `Pivotal Moment: ${gameCommentary.pivotalLabel || 'Critical move'}! Click to view in Replay mode` : 'Switch to Replay mode'}
-            aria-label={gameCommentary.isPivotal ? `Pivotal Moment: ${gameCommentary.pivotalLabel || 'Critical move'}! Click to view in Replay mode` : 'Switch to Replay mode'}
+            title={gameCommentary.isPivotal ? 'Pivotal Moment reached! Click to view in Replay mode' : 'Switch to Replay mode'}
+            aria-label={gameCommentary.isPivotal ? 'Pivotal Moment reached! Click to view in Replay mode' : 'Switch to Replay mode'}
           >
             {#if gameCommentary.isPivotal}
               <span class="pivotal_pulse_ring" aria-hidden="true"></span>
@@ -562,11 +552,6 @@
               <line x1="3" y1="21" x2="10" y2="14"></line>
             </svg>
             <span>Replay</span>
-            {#if gameCommentary.isPivotal}
-              <span class="pivotal_badge_indicator">
-                ⚡ {gameCommentary.pivotalLabel || 'Pivotal'}
-              </span>
-            {/if}
           </button>
         </div>
 
@@ -772,17 +757,11 @@
                       Move {Math.floor(currentMoveIndex / 2) + 1}{currentMoveIndex % 2 === 0 ? '.' : '...'} {samplePgnMoves[currentMoveIndex]}
                     </span>
                   {/if}
+                </div>
+                <div class="commentary_live_indicator">
                   {#if gameCommentary.isPivotal}
                     <span class="commentary_pivotal_badge">
                       ⚡ Pivotal Moment
-                    </span>
-                  {/if}
-                </div>
-                <div class="commentary_live_indicator">
-                  {#if wasPausedForPivotal}
-                    <span class="pivotal_paused_badge">
-                      <span class="paused_dot"></span>
-                      Auto-Paused
                     </span>
                   {:else}
                     <span class="commentary_pulse_dot"></span>
@@ -1281,21 +1260,6 @@
     }
   }
 
-  .pivotal_badge_indicator {
-    font-size: 11px;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-    background: #000000;
-    color: #ffffff;
-    padding: 0.15rem 0.5rem;
-    border-radius: 999px;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.2rem;
-    margin-left: 0.35rem;
-    animation: pivotalBadgeGlow 1.6s infinite alternate ease-in-out;
-  }
 
   @keyframes pivotalBadgeGlow {
     0% {
@@ -1693,39 +1657,6 @@
     color: #4b5563;
   }
 
-  .pivotal_paused_badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    font-size: 10.5px;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    background: #000000;
-    color: #ffb703;
-    padding: 0.18rem 0.55rem;
-    border-radius: 999px;
-    animation: pausePulse 1.8s infinite ease-in-out;
-  }
-
-  .paused_dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: #ffb703;
-    box-shadow: 0 0 5px rgba(255, 183, 3, 0.8);
-  }
-
-  @keyframes pausePulse {
-    0%, 100% {
-      opacity: 1;
-      transform: scale(1);
-    }
-    50% {
-      opacity: 0.85;
-      transform: scale(1.03);
-    }
-  }
 
   .commentary_pulse_dot {
     width: 7px;
@@ -1770,9 +1701,8 @@
   /* Focused View (focused_analysis_page.png) */
   .analysis_workspace.focused_workspace {
     justify-content: center;
-    align-items: center;
+    align-items: flex-start;
     gap: 3.5rem;
-    min-height: calc(85vh - 70px);
     width: 100%;
     margin: 0 auto;
   }
@@ -1787,8 +1717,8 @@
 
   .analysis_workspace.focused_workspace .widgets_section {
     flex: 0 0 auto;
-    width: 270px;
-    min-width: 270px;
+    width: 320px;
+    min-width: 320px;
   }
 
   .focused_container {
