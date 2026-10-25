@@ -1,3 +1,5 @@
+## takeback - Helping you replay your chess games through creating your chess clone.
+
 ## Inspiration
 Ever played a chess game where you're playing beautifully, then BAM! You've blundered, you lose, and you know exactly what you could have done instead to keep your momentum. Introducing takeback, a tool that allow users to replay their past games with an AI clone of themselves acting as their opponent.
 
@@ -18,3 +20,5 @@ You can create a chess clone! We learned how an MLP model works in the context o
 
 ## What's next for takeback
 We want to bring our application to more users, chess player of all skill levels. We aim to grow and scale our application to handle hundreds of games for hundreds of users, streamlining our model training, and data pipelines while ensuring our application remains working for a high load.
+
+# Made by Sai, Saaketh and Ragul for GatorHacks V!
